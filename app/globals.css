@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #F9F9EE;
+  --color-forest: #1D423C;
+  --color-forest-deep: #142E29;
+
+  --font-display: var(--font-anton);
+  --font-body: var(--font-space-grotesk);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-forest);
+  font-family: var(--font-body);
+}
+
+::selection {
+  background-color: var(--color-forest);
+  color: var(--color-cream);
+}

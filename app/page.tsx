@@ -1,9 +1,17 @@
+import Hero from "@/components/Hero";
+import FlavorShowcase from "@/components/FlavorShowcase";
+import Benefits from "@/components/Benefits";
+import SocialProof from "@/components/SocialProof";
+import Footer from "@/components/Footer";
+
 export default function Home() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-cream">
-      <h1 className="font-display text-6xl uppercase text-forest">
-        Mateína — coming soon
-      </h1>
-    </main>
+    <>
+      <Hero />
+      <FlavorShowcase />
+      <Benefits />
+      <SocialProof />
+      <Footer />
+    </>
   );
 }

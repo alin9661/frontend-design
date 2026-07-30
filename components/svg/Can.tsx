@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 export default function Can({
   body,
   accent,
@@ -9,7 +11,10 @@ export default function Can({
   label?: string;
   className?: string;
 }) {
-  const uid = `can-${body.replace("#", "")}-${accent.replace("#", "")}`;
+  // useId() works in both Server and Client Components and guarantees a
+  // unique id per instance, so two Cans sharing the same colors no longer
+  // mint duplicate gradient/clip def ids in the document.
+  const uid = `can-${useId().replace(/:/g, "")}`;
 
   return (
     <svg
@@ -98,7 +103,7 @@ export default function Can({
       <g
         textAnchor="middle"
         fill={accent}
-        style={{ fontFamily: "inherit", fontWeight: 800 }}
+        style={{ fontFamily: "var(--font-anton), sans-serif", fontWeight: 400 }}
       >
         <text x="100" y="150" fontSize="34" letterSpacing="0.5">
           MATE
@@ -109,7 +114,10 @@ export default function Can({
       </g>
 
       {/* flavor label, constrained to the can body width so long names
-          (e.g. "RASPBERRY YUZU", "MANGO KEY LIME") never clip at the edges */}
+          (e.g. "RASPBERRY YUZU", "MANGO KEY LIME") never clip at the edges.
+          Only the longer names actually need the textLength squeeze — short
+          ones like "MINT LIMEADE" must render at their natural width instead
+          of being stretched out to fill 148 units. */}
       {label ? (
         <text
           x="100"
@@ -117,9 +125,10 @@ export default function Can({
           textAnchor="middle"
           fill={accent}
           fontSize="18"
-          textLength="148"
-          lengthAdjust="spacingAndGlyphs"
-          style={{ fontFamily: "inherit", fontWeight: 800 }}
+          {...(label.length > 12
+            ? { textLength: "148", lengthAdjust: "spacingAndGlyphs" as const }
+            : {})}
+          style={{ fontFamily: "var(--font-anton), sans-serif", fontWeight: 400 }}
         >
           {label.toUpperCase()}
         </text>
@@ -134,7 +143,7 @@ export default function Can({
         fill={body}
         fontSize="10"
         letterSpacing="2.5"
-        style={{ fontFamily: "inherit", fontWeight: 700 }}
+        style={{ fontFamily: "var(--font-anton), sans-serif", fontWeight: 400 }}
       >
         ZERO SUGAR · ENERGY BREW
       </text>

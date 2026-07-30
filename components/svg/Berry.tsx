@@ -14,6 +14,8 @@ const DRUPELETS: { x: number; y: number; r: number }[] = [
   { x: 50, y: 71, r: 9.5 },
 ];
 
+import { useId } from "react";
+
 export default function Berry({
   className,
   color = "#D94F3D",
@@ -21,7 +23,9 @@ export default function Berry({
   className?: string;
   color?: string;
 }) {
-  const uid = `berry-${color.replace("#", "")}`;
+  // useId() works in Server and Client Components and guarantees uniqueness
+  // per instance, so two same-colored Berries no longer collide on ids.
+  const uid = `berry-${useId().replace(/:/g, "")}`;
 
   return (
     <svg

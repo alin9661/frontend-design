@@ -64,8 +64,32 @@ export const flavors: Flavor[] = [
   },
 ];
 
+// NOTE: keep these in sync with the `--color-*` tokens in app/globals.css's
+// `@theme` block — that's what powers the `bg-forest`, `text-cream`, etc.
+// Tailwind utility classes. If you change a value here, change it there too.
 export const brand: { cream: string; forest: string; forestDeep: string } = {
   cream: "#F9F9EE",
   forest: "#1D423C",
   forestDeep: "#142E29",
 };
+
+// Decorative art colors shared by sections that scatter leaves/citrus/berries
+// as background flourish (Hero's floating field, Benefits' idle leaves).
+// `berry` intentionally uses the current raspberry accent family (#B5301F
+// deepened for contrast) rather than the stale #D94F3D the decor art used to
+// hardcode.
+export const decor = {
+  leafDark: "#2E6B5A",
+  leafLight: "#4C8C74",
+  citrusLemon: "#F2C94C",
+  citrusPeach: "#F2994A",
+  berry: "#B5301F",
+};
+
+export function flavorById(id: string): Flavor {
+  const match = flavors.find((f) => f.id === id);
+  if (!match) {
+    throw new Error(`Unknown flavor id: ${id} — check lib/flavors.ts`);
+  }
+  return match;
+}

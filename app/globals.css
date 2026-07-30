@@ -9,8 +9,10 @@
   --font-body: var(--font-space-grotesk);
 }
 
-html {
-  scroll-behavior: smooth;
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
 body {
@@ -22,4 +24,30 @@ body {
 ::selection {
   background-color: var(--color-forest);
   color: var(--color-cream);
+}
+
+/* Marquee strip used by SocialProof's "join the family" ticker. Lives here
+   (rather than an inline <style> in the component) so it participates in the
+   global reduced-motion pause below. */
+@keyframes mateina-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.mateina-marquee-track {
+  animation: mateina-marquee 18s linear infinite;
+}
+
+.mateina-marquee:hover .mateina-marquee-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mateina-marquee-track {
+    animation-play-state: paused;
+  }
 }

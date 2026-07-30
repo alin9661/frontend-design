@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Anton, Space_Grotesk } from "next/font/google";
+import Providers from "./providers";
 import "./globals.css";
 
 const anton = Anton({
@@ -15,10 +16,28 @@ const spaceGrotesk = Space_Grotesk({
   display: "swap",
 });
 
+const title = "Mateína — Smooth Lift. Zero Crash.";
+const description =
+  "Clean, sustained energy brewed from organic yerba mate grown in the forests of Misiones, Argentina. No sugar. No jitters. No compromise.";
+
 export const metadata: Metadata = {
-  title: "Mateína — Smooth Lift. Zero Crash.",
-  description:
-    "Clean, sustained energy brewed from organic yerba mate grown in the forests of Misiones, Argentina. No sugar. No jitters. No compromise.",
+  metadataBase: new URL("https://frontend-design.vercel.app"),
+  title,
+  description,
+  openGraph: {
+    title,
+    description,
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#F9F9EE",
 };
 
 export default function RootLayout({
@@ -28,7 +47,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${anton.variable} ${spaceGrotesk.variable}`}>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

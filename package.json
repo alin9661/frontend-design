@@ -9,23 +9,23 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "next": "^15",
-    "react": "^19",
-    "react-dom": "^19",
-    "framer-motion": "^12"
+    "next": "^15.5.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "framer-motion": "^12.43.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/postcss": "^4.3.0",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "*",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.4",
     "jsdom": "^30.0.1",
-    "tailwindcss": "^4",
-    "typescript": "^5",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.9.0",
     "vitest": "^4.1.10"
   }
 }

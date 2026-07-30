@@ -32,6 +32,7 @@ Open [http://localhost:3000](http://localhost:3000).
 | `bun run dev` | Start the dev server |
 | `bun run test` | Run the test suite (`vitest run`, single pass — never bare `vitest`) |
 | `bun run build` | Production build |
+| `bun run start` | Serve the production build |
 
 See [TESTING.md](./TESTING.md) for the testing philosophy and conventions,
 [TODOS.md](./TODOS.md) for known gaps and deferred work, and

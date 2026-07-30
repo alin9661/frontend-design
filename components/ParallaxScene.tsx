@@ -1,7 +1,5 @@
 "use client";
 
-// DECISION POINT: motion feel — depth multiplier (40) and spring (stiffness 60, damping 18) define floaty vs snappy.
-
 import { createContext, useContext, useEffect } from "react";
 import {
   motion,
@@ -10,6 +8,11 @@ import {
   useReducedMotion,
   type MotionValue,
 } from "framer-motion";
+
+// DECISION POINT: motion feel — depth multiplier (40) and spring (stiffness 60, damping 18) define floaty vs snappy.
+export const PARALLAX_SHIFT_PX = 40;
+export const SCROLL_DRIFT = -0.12;
+export const BOB_BASE_S = 5;
 
 type ParallaxContextValue = {
   mx: MotionValue<number>;
@@ -73,10 +76,11 @@ export default function ParallaxScene({
 
 export function useParallax(): { mx: MotionValue<number>; my: MotionValue<number> } {
   const ctx = useContext(ParallaxContext);
-  // Safe default: static MotionValue(0) when used outside a provider.
-  // eslint-disable-next-line react-hooks/rules-of-hooks
+  // Safe default: static MotionValue(0) when used outside a provider. These
+  // hooks run unconditionally on every call (the `if` below only decides
+  // which values get returned), so this is a normal, rules-of-hooks-safe call
+  // order — no eslint-disable needed (eslint isn't even installed here).
   const fallbackMx = useMotionValue(0);
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   const fallbackMy = useMotionValue(0);
   if (!ctx) {
     return { mx: fallbackMx, my: fallbackMy };

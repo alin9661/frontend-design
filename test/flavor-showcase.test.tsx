@@ -39,7 +39,7 @@ describe("components/FlavorShowcase", () => {
     }
   });
 
-  it("has exactly one picker pressed at a time, and moves the pressed state + live region on click", async () => {
+  it("has exactly one picker pressed at a time, and the live region only announces manual picks", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<FlavorShowcase />);
 
@@ -48,13 +48,22 @@ describe("components/FlavorShowcase", () => {
 
     expect(pressed()).toHaveLength(1);
     expect(pressed()[0]).toHaveAccessibleName(flavors[0].name);
-    expect(screen.getByText(`${flavors[0].name} selected`)).toBeInTheDocument();
+    // Nothing has been manually picked yet (the initial flavor is just the
+    // default, not a "selection"), so the live region must stay silent.
+    expect(screen.queryByText(`${flavors[0].name} selected`)).not.toBeInTheDocument();
 
     await user.click(buttons[2]);
 
     expect(pressed()).toHaveLength(1);
     expect(pressed()[0]).toHaveAccessibleName(flavors[2].name);
     expect(screen.getByText(`${flavors[2].name} selected`)).toBeInTheDocument();
+  });
+
+  it("does not have aria-current on the picker buttons (aria-pressed is the sole toggle signal)", () => {
+    render(<FlavorShowcase />);
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).not.toHaveAttribute("aria-current");
+    }
   });
 
   it("auto-advances to the next flavor every 4000ms and wraps from last back to first", () => {
@@ -92,32 +101,26 @@ describe("components/FlavorShowcase", () => {
     expect(pressedFlavorName()).toBe(flavors[1].name);
   });
 
-  it("resets the auto-advance interval when a dot is clicked manually", () => {
+  it("permanently stops auto-advance once a dot is clicked manually", () => {
     render(<FlavorShowcase />);
 
-    // NOTE: uses fireEvent.click rather than userEvent.click. userEvent's
-    // realistic pointer choreography also fires pointerenter on the
-    // <section> ancestor (moving "into" the button counts as moving into
-    // the section), which sets isHovering=true and permanently suspends
-    // auto-advance after any click — see the bug noted in the task report.
-    // A plain click event isolates the interval-reset behavior from that.
+    // A plain click event (rather than userEvent.click) keeps this test
+    // focused purely on the manual-selection contract, without also
+    // exercising userEvent's realistic pointer choreography (which also
+    // fires pointerenter on the <section> ancestor).
     act(() => {
       vi.advanceTimersByTime(AUTO_ADVANCE_MS / 2);
     });
     fireEvent.click(screen.getByRole("button", { name: flavors[2].name }));
     expect(pressedFlavorName()).toBe(flavors[2].name);
 
-    // The interval should have restarted from the click, so it must take a
-    // full 4000ms from here, not just the remainder of the interrupted one.
+    // Per the current contract (WCAG 2.2.2), a manual pick stops
+    // auto-advance for good — it must never resume, no matter how much time
+    // passes afterward.
     act(() => {
-      vi.advanceTimersByTime(AUTO_ADVANCE_MS - 1);
+      vi.advanceTimersByTime(AUTO_ADVANCE_MS * 5);
     });
     expect(pressedFlavorName()).toBe(flavors[2].name);
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(pressedFlavorName()).toBe(flavors[3].name);
   });
 
   it("disables auto-advance under reduced motion, but manual selection still works", async () => {

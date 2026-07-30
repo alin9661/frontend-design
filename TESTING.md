@@ -36,6 +36,19 @@ repo — it defaults to watch mode, which hangs in CI and agent sessions.
   `aria-live` announcement.
 - **`test/social-proof.test.tsx`** — `components/SocialProof.tsx`. Verifies the
   accessible star rating and the testimonial attribution text.
+- **`test/hero.test.tsx`** — `components/Hero.tsx`. Verifies the two-line
+  headline, CTA anchor targets, and both decor cans' accessible names.
+- **`test/benefits.test.tsx`** — `components/Benefits.tsx`. Verifies the three
+  benefit cards render and decorative leaves are `aria-hidden`.
+- **`test/footer.test.tsx`** — `components/Footer.tsx`. Verifies the shop link's
+  `href`/`target`/`rel` safety attributes, disclaimer, and hidden watermark.
+- **`test/page.test.tsx`** — `app/page.tsx` integration. Renders the full page
+  and asserts every in-page anchor (`#flavors`, `#benefits`) targets a real id.
+- **`test/parallax-scene.test.tsx`** — `components/ParallaxScene.tsx`. Verifies
+  the `useParallax` out-of-provider fallback, pointer-listener lifecycle, and
+  reduced-motion behavior.
+- **`test/svg.test.tsx`** — `components/svg/{Leaf,Citrus,Berry}.tsx` render
+  smoke tests with color-prop application.
 
 ## Conventions
 

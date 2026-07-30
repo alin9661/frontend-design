@@ -33,6 +33,12 @@ describe("lib/flavors", () => {
     }
   });
 
+  it("includes 'mint' and 'raspberry' ids (Hero relies on non-null lookups for these)", () => {
+    const ids = flavors.map((f) => f.id);
+    expect(ids).toContain("mint");
+    expect(ids).toContain("raspberry");
+  });
+
   it("defines the brand palette with 7-character hex colors", () => {
     expect(brand.cream).toMatch(HEX_RE);
     expect(brand.forest).toMatch(HEX_RE);

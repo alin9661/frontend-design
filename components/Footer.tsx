@@ -9,8 +9,8 @@ export default function Footer() {
     <footer className="relative bg-forest-deep text-cream pt-32 overflow-hidden">
       <div className="relative z-10 flex flex-col items-center text-center px-6">
         <motion.h2
-          initial={reduceMotion ? undefined : { y: 40, opacity: 0 }}
-          whileInView={reduceMotion ? undefined : { y: 0, opacity: 1 }}
+          initial={{ y: 40, opacity: 0 }}
+          whileInView={{ y: 0, opacity: 1 }}
           viewport={{ once: true, amount: 0.5 }}
           transition={{ duration: 0.6, ease: "easeOut" }}
           className="font-display uppercase text-[clamp(3rem,10vw,8rem)] leading-[0.9]"
@@ -19,8 +19,8 @@ export default function Footer() {
         </motion.h2>
 
         <motion.p
-          initial={reduceMotion ? undefined : { y: 40, opacity: 0 }}
-          whileInView={reduceMotion ? undefined : { y: 0, opacity: 1 }}
+          initial={{ y: 40, opacity: 0 }}
+          whileInView={{ y: 0, opacity: 1 }}
           viewport={{ once: true, amount: 0.5 }}
           transition={{ duration: 0.6, ease: "easeOut", delay: 0.08 }}
           className="mt-6 font-body text-lg md:text-xl text-cream/80"
@@ -29,8 +29,8 @@ export default function Footer() {
         </motion.p>
 
         <motion.div
-          initial={reduceMotion ? undefined : { y: 40, opacity: 0 }}
-          whileInView={reduceMotion ? undefined : { y: 0, opacity: 1 }}
+          initial={{ y: 40, opacity: 0 }}
+          whileInView={{ y: 0, opacity: 1 }}
           viewport={{ once: true, amount: 0.5 }}
           transition={{ duration: 0.6, ease: "easeOut", delay: 0.16 }}
           className="mt-10"
@@ -48,8 +48,8 @@ export default function Footer() {
         </motion.div>
 
         <motion.p
-          initial={reduceMotion ? undefined : { y: 20, opacity: 0 }}
-          whileInView={reduceMotion ? undefined : { y: 0, opacity: 1 }}
+          initial={{ y: 20, opacity: 0 }}
+          whileInView={{ y: 0, opacity: 1 }}
           viewport={{ once: true, amount: 0.5 }}
           transition={{ duration: 0.6, ease: "easeOut", delay: 0.24 }}
           className="mt-16 text-cream/50 text-xs font-body"
@@ -61,8 +61,8 @@ export default function Footer() {
 
       <motion.div
         aria-hidden="true"
-        initial={reduceMotion ? undefined : { y: 60, opacity: 0 }}
-        whileInView={reduceMotion ? undefined : { y: 0, opacity: 1 }}
+        initial={{ y: 60, opacity: 0 }}
+        whileInView={{ y: 0, opacity: 1 }}
         viewport={{ once: true, amount: 0.2 }}
         transition={{ duration: 0.8, ease: "easeOut", delay: 0.1 }}
         className="select-none pointer-events-none text-center font-display uppercase text-[clamp(6rem,22vw,20rem)] leading-none text-cream/10 whitespace-nowrap mt-24 -mb-[0.25em]"

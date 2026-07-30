@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion, useInView, useReducedMotion } from "framer-motion";
 import Can from "@/components/svg/Can";
 import { flavors } from "@/lib/flavors";
 
@@ -9,56 +9,86 @@ const AUTO_ADVANCE_MS = 4000;
 
 export default function FlavorShowcase() {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [announcement, setAnnouncement] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
+  const [autoAdvanceStopped, setAutoAdvanceStopped] = useState(false);
   const prefersReducedMotion = useReducedMotion();
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  // `initial: true` assumes the section is visible until the (real, in
+  // production) IntersectionObserver says otherwise, rather than waiting for
+  // the first callback tick before the carousel can ever move.
+  const isInView = useInView(sectionRef, { amount: 0.3, initial: true });
 
   const active = flavors[activeIndex];
 
-  useEffect(() => {
-    if (isHovering || prefersReducedMotion) return;
-
+  // Single source of truth for (re)starting the auto-advance timer: clears
+  // any existing interval first so callers never have to think about it.
+  function startAutoAdvance() {
+    if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setActiveIndex((i) => (i + 1) % flavors.length);
     }, AUTO_ADVANCE_MS);
+  }
+
+  useEffect(() => {
+    // Auto-advance is suspended (not just paused) once a manual selection
+    // has been made — see selectFlavor — and otherwise only runs when the
+    // section is scrolled into view, isn't being hovered by a mouse/pen
+    // pointer, and the visitor hasn't asked for reduced motion.
+    if (prefersReducedMotion || autoAdvanceStopped || isHovering || !isInView) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
+    }
+
+    startAutoAdvance();
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isHovering, prefersReducedMotion]);
+  }, [isHovering, prefersReducedMotion, autoAdvanceStopped, isInView]);
 
   function selectFlavor(index: number) {
     setActiveIndex(index);
-    // manual pick resets/pauses auto-advance briefly via the hover-independent
-    // effect re-running (activeIndex change doesn't retrigger effect, so we
-    // explicitly restart the interval here). Reduced-motion users never get
-    // the interval restarted, so a manual pick stays put.
+    setAnnouncement(`${flavors[index].name} selected`);
+    // Manual selection stops auto-advance permanently (WCAG 2.2.2): once a
+    // visitor has taken control of the carousel it shouldn't keep moving out
+    // from under them. This also sidesteps the "touch can't pause" problem
+    // (a tap is itself a selection, so touch users are never stuck watching
+    // it auto-advance) and the interval-reset complexity the old
+    // restart-on-pick contract required.
+    setAutoAdvanceStopped(true);
     if (timerRef.current) clearInterval(timerRef.current);
-    if (!isHovering && !prefersReducedMotion) {
-      timerRef.current = setInterval(() => {
-        setActiveIndex((i) => (i + 1) % flavors.length);
-      }, AUTO_ADVANCE_MS);
-    }
   }
 
   return (
     <motion.section
+      ref={sectionRef}
       id="flavors"
       onPointerEnter={(e) => {
-        if (e.pointerType === "mouse") setIsHovering(true);
+        if (e.pointerType === "mouse" || e.pointerType === "pen") setIsHovering(true);
       }}
       onPointerLeave={(e) => {
-        if (e.pointerType === "mouse") setIsHovering(false);
+        if (e.pointerType === "mouse" || e.pointerType === "pen") setIsHovering(false);
       }}
       onFocus={() => setIsHovering(true)}
-      onBlur={() => setIsHovering(false)}
+      onBlur={(e) => {
+        // Only treat focus as having left the section when it's actually
+        // moved outside it — tabbing between the picker dots fires blur/
+        // focus on each button in turn, and without this check every one of
+        // those transitional blurs would toggle isHovering off and on,
+        // needlessly tearing down and restarting the auto-advance effect.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setIsHovering(false);
+        }
+      }}
       animate={{ backgroundColor: active.bg }}
       transition={{ duration: prefersReducedMotion ? 0 : 0.6, ease: "easeInOut" }}
-      className="relative flex min-h-screen w-full flex-col items-center overflow-hidden px-6 py-20 md:py-28"
+      className="relative flex min-h-svh w-full flex-col items-center overflow-hidden px-6 py-20 md:py-28"
     >
       <motion.h2
-        initial={prefersReducedMotion ? undefined : { y: 40, opacity: 0 }}
-        whileInView={prefersReducedMotion ? undefined : { y: 0, opacity: 1 }}
+        initial={{ y: 40, opacity: 0 }}
+        whileInView={{ y: 0, opacity: 1 }}
         viewport={{ once: true, amount: 0.4 }}
         transition={{ duration: 0.6, ease: "easeInOut" }}
         animate={{ color: active.ink }}
@@ -66,8 +96,11 @@ export default function FlavorShowcase() {
       >
         FIVE FLAVORS. ONE LIFT.
       </motion.h2>
+      {/* Announces manual picks only — auto-advance ticks stay silent so
+          screen reader users aren't interrupted every 4 seconds by a
+          rotation they didn't ask for. */}
       <span className="sr-only" aria-live="polite">
-        {active.name} selected
+        {announcement}
       </span>
 
       <div className="relative flex flex-1 w-full items-center justify-center">
@@ -77,12 +110,13 @@ export default function FlavorShowcase() {
         <AnimatePresence>
           <motion.span
             key={`backdrop-${active.id}`}
+            aria-hidden="true"
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            animate={{ opacity: 0.2 }}
             exit={{ opacity: 0 }}
             transition={{ duration: prefersReducedMotion ? 0.3 : 0.6, ease: "easeInOut" }}
             style={{ color: active.ink }}
-            className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 select-none text-center font-display text-[clamp(3rem,10vw,9rem)] uppercase leading-[0.9] opacity-20"
+            className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 select-none text-center font-display text-[clamp(3rem,10vw,9rem)] uppercase leading-[0.9]"
           >
             {active.name}
           </motion.span>
@@ -153,10 +187,9 @@ export default function FlavorShowcase() {
               key={flavor.id}
               type="button"
               aria-label={flavor.name}
-              aria-current={isActive}
               aria-pressed={isActive}
               onClick={() => selectFlavor(index)}
-              className="group relative flex h-10 w-10 items-center justify-center rounded-full transition-transform duration-300 hover:scale-110"
+              className="group relative flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-300 hover:scale-110"
             >
               <span
                 className="block h-7 w-7 rounded-full transition-[box-shadow] duration-[600ms] ease-in-out"

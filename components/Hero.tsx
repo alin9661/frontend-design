@@ -1,16 +1,16 @@
 "use client";
 
 import { motion, useReducedMotion, useTransform } from "framer-motion";
-import ParallaxScene, { useParallax } from "@/components/ParallaxScene";
+import ParallaxScene, { useParallax, PARALLAX_SHIFT_PX } from "@/components/ParallaxScene";
 import FloatingItem from "@/components/FloatingItem";
 import Leaf from "@/components/svg/Leaf";
 import Citrus from "@/components/svg/Citrus";
 import Berry from "@/components/svg/Berry";
 import Can from "@/components/svg/Can";
-import { flavors } from "@/lib/flavors";
+import { flavorById, decor } from "@/lib/flavors";
 
-const mint = flavors.find((f) => f.id === "mint")!;
-const raspberry = flavors.find((f) => f.id === "raspberry")!;
+const mint = flavorById("mint");
+const raspberry = flavorById("raspberry");
 
 const container = {
   hidden: {},
@@ -36,12 +36,12 @@ function HeadlineParallax() {
   const reduceMotion = useReducedMotion();
   const { mx, my } = useParallax();
   const depth = 0.3;
-  const translateX = useTransform(mx, (v) => v * depth * 40);
-  const translateY = useTransform(my, (v) => v * depth * 40);
+  const translateX = useTransform(mx, (v) => v * depth * PARALLAX_SHIFT_PX);
+  const translateY = useTransform(my, (v) => v * depth * PARALLAX_SHIFT_PX);
 
   return (
     <motion.h1
-      variants={reduceMotion ? undefined : item}
+      variants={item}
       style={
         reduceMotion ? undefined : { x: translateX, y: translateY }
       }
@@ -54,11 +54,9 @@ function HeadlineParallax() {
 }
 
 export default function Hero() {
-  const reduceMotion = useReducedMotion();
-
   return (
-    <section className="relative min-h-screen bg-cream overflow-hidden">
-      <ParallaxScene className="min-h-screen w-full flex items-center justify-center px-6">
+    <section className="relative min-h-svh bg-cream overflow-hidden">
+      <ParallaxScene className="min-h-svh w-full flex items-center justify-center px-6">
         {/* Depth-blurred blob behind headline */}
         <div
           aria-hidden
@@ -74,7 +72,7 @@ export default function Hero() {
           y="14%"
           className="hidden md:block w-16 md:w-20"
         >
-          <Leaf color="#2E6B5A" className="w-full -rotate-[18deg]" />
+          <Leaf color={decor.leafDark} className="w-full -rotate-[18deg]" />
         </FloatingItem>
         <FloatingItem
           depth={0.6}
@@ -82,7 +80,7 @@ export default function Hero() {
           y="10%"
           className="hidden md:block w-14 md:w-16"
         >
-          <Leaf color="#4C8C74" className="w-full rotate-[24deg]" />
+          <Leaf color={decor.leafLight} className="w-full rotate-[24deg]" />
         </FloatingItem>
         <FloatingItem
           depth={0.6}
@@ -90,7 +88,7 @@ export default function Hero() {
           y="70%"
           className="hidden md:block w-24 md:w-28"
         >
-          <Leaf color="#4C8C74" className="w-full rotate-[10deg]" />
+          <Leaf color={decor.leafLight} className="w-full rotate-[10deg]" />
         </FloatingItem>
         <FloatingItem
           depth={0.6}
@@ -98,7 +96,7 @@ export default function Hero() {
           y="66%"
           className="hidden md:block w-10 md:w-12"
         >
-          <Citrus color="#F2C94C" className="w-full -rotate-[12deg]" />
+          <Citrus color={decor.citrusLemon} className="w-full -rotate-[12deg]" />
         </FloatingItem>
 
         {/* Depth tier 1.2 (mid) */}
@@ -108,7 +106,7 @@ export default function Hero() {
           y="24%"
           className="hidden md:block w-10 md:w-14"
         >
-          <Leaf color="#2E6B5A" className="w-full rotate-[8deg]" />
+          <Leaf color={decor.leafDark} className="w-full rotate-[8deg]" />
         </FloatingItem>
         <FloatingItem
           depth={1.2}
@@ -116,7 +114,7 @@ export default function Hero() {
           y="30%"
           className="hidden md:block w-16 md:w-20"
         >
-          <Berry color="#D94F3D" className="w-full -rotate-[6deg]" />
+          <Berry color={decor.berry} className="w-full -rotate-[6deg]" />
         </FloatingItem>
         <FloatingItem
           depth={1.2}
@@ -124,7 +122,7 @@ export default function Hero() {
           y="50%"
           className="hidden md:block w-8 md:w-10"
         >
-          <Citrus color="#F2994A" className="w-full rotate-[16deg]" />
+          <Citrus color={decor.citrusPeach} className="w-full rotate-[16deg]" />
         </FloatingItem>
         <FloatingItem depth={1.2} x="5%" y="62%" className="w-fit">
           <Can
@@ -142,7 +140,7 @@ export default function Hero() {
           y="8%"
           className="hidden md:block w-8"
         >
-          <Leaf color="#4C8C74" className="w-full -rotate-[30deg]" />
+          <Leaf color={decor.leafLight} className="w-full -rotate-[30deg]" />
         </FloatingItem>
         <FloatingItem depth={1.6} x="85%" y="60%" className="w-fit">
           <Can
@@ -155,14 +153,14 @@ export default function Hero() {
 
         {/* ---------- Center content ---------- */}
         <motion.div
-          variants={reduceMotion ? undefined : container}
-          initial={reduceMotion ? undefined : "hidden"}
-          animate={reduceMotion ? undefined : "show"}
+          variants={container}
+          initial="hidden"
+          animate="show"
           className="relative z-10 mx-auto flex w-full max-w-6xl flex-col items-center text-center"
         >
           <motion.p
-            variants={reduceMotion ? undefined : item}
-            className="font-body tracking-[0.2em] md:tracking-[0.3em] text-xs md:text-sm text-forest/80 mb-6 whitespace-nowrap"
+            variants={item}
+            className="font-body tracking-[0.15em] min-[380px]:tracking-[0.2em] md:tracking-[0.3em] text-xs md:text-sm text-forest/80 mb-6 whitespace-normal min-[380px]:whitespace-nowrap"
           >
             ORGANIC YERBA MATE · ZERO SUGAR
           </motion.p>
@@ -170,7 +168,7 @@ export default function Hero() {
           <HeadlineParallax />
 
           <motion.p
-            variants={reduceMotion ? undefined : item}
+            variants={item}
             className="font-body max-w-xl mx-auto mt-8 text-base md:text-lg text-forest/80"
           >
             Clean, sustained energy brewed from organic yerba mate grown in
@@ -179,7 +177,7 @@ export default function Hero() {
           </motion.p>
 
           <motion.div
-            variants={reduceMotion ? undefined : item}
+            variants={item}
             className="mt-10 flex flex-col sm:flex-row items-center gap-6"
           >
             <a

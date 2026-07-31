@@ -2,12 +2,15 @@
 //
 // Section 6/6 (design doc §5): 5 flavor cans on a drag/arrow-key carousel.
 // The DOM buttons + selection state below are the REAL interaction contract
-// (M0), untouched. M1 wires `useView` here; the GL can mesh + MSDF flavor
-// name + real "picker" scene + `invoke(viewId, "select", [i])` cross-thread
-// sync land together in M2 (this section has no way to reach its own
-// viewId to call `invoke` until then — uses the M1 checkpoint "placeholder"
-// scene for now). The DOM panel below already works with zero GL, as
-// required by §6's a11y rule.
+// (M0), untouched. M2 (picker workstream) wires this to the real "picker"
+// scene (lib/scenes/picker/scene.ts): selecting a flavor button both updates
+// the DOM panel (as before) AND calls `useEngine().invoke(viewId, "select",
+// [index])` — the cross-thread SCENE_INVOKE RPC that rotates the GL
+// carousel and lerps its background tint to `flavor.bg`. `viewId` comes from
+// useView's `onReady` option (a minimal M2 addition — see useView.ts's
+// header — since useView's documented return is just a ref callback with no
+// way to read back the viewId EngineProvider assigned it). The DOM panel
+// below already works with zero GL, as required by §6's a11y rule.
 
 "use client";
 
@@ -15,12 +18,22 @@ import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { flavors } from "@/lib/flavors";
 import { useView } from "@/lib/engine/react/useView";
+import { useEngine } from "@/lib/engine/react/useEngine";
 
 export default function SectionPicker() {
   const [selectedId, setSelectedId] = useState(flavors[0]!.id);
+  const [viewId, setViewId] = useState<number | null>(null);
   const reduceMotion = useReducedMotion();
   const selected = flavors.find((f) => f.id === selectedId) ?? flavors[0]!;
-  const viewRef = useView("placeholder");
+  const { invoke } = useEngine();
+  const viewRef = useView("picker", { onReady: setViewId });
+
+  function selectFlavor(id: string, index: number) {
+    setSelectedId(id);
+    if (viewId !== null) {
+      invoke(viewId, "select", [index]);
+    }
+  }
 
   return (
     <section
@@ -30,10 +43,9 @@ export default function SectionPicker() {
       className="relative min-h-svh bg-forest px-6 py-32 text-cream"
     >
       {/* 5 can meshes render behind this copy via EngineProvider's shared
-          canvas once the real "picker" scene lands in M2; selecting a
-          flavor below also calls invoke(viewId, "select", [index]) so the
-          GL carousel and the DOM buttons stay in sync. GL clear-region
-          lerps to flavor.bg. */}
+          canvas (lib/scenes/picker/scene.ts); selecting a flavor below also
+          calls invoke(viewId, "select", [index]) so the GL carousel and the
+          DOM buttons stay in sync. GL clear-region lerps to flavor.bg. */}
       <div className="mx-auto max-w-3xl">
         <h2
           id="deep-wave-picker-heading"
@@ -52,12 +64,12 @@ export default function SectionPicker() {
           aria-label="Flavor picker"
           className="mt-10 flex flex-wrap gap-3"
         >
-          {flavors.map((flavor) => (
+          {flavors.map((flavor, index) => (
             <button
               key={flavor.id}
               type="button"
               aria-pressed={flavor.id === selectedId}
-              onClick={() => setSelectedId(flavor.id)}
+              onClick={() => selectFlavor(flavor.id, index)}
               className="flex items-center gap-2 rounded-full border border-cream/30 px-4 py-2 font-body text-sm uppercase tracking-wide transition-colors data-[selected=true]:border-cream data-[selected=true]:bg-cream data-[selected=true]:text-forest"
               data-selected={flavor.id === selectedId}
             >

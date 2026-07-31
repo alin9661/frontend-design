@@ -43,6 +43,8 @@ function randomScalars(rand: () => number): FrameStateScalars {
     pointerY: f32(rand() * 2 - 1),
     pointerVX: f32((rand() - 0.5) * 10),
     pointerVY: f32((rand() - 0.5) * 10),
+    pointerDown: rand() < 0.5,
+    pointerInside: rand() < 0.5,
   };
 }
 
@@ -87,5 +89,36 @@ describe("worker/protocol — packFrameState/unpackFrameState fuzz round-trip", 
       const packed = packFrameState(randomScalars(rand), randomViews(rand, viewCount));
       expect(() => unpackFrameState(packed)).not.toThrow();
     }
+  });
+});
+
+describe("worker/protocol — pointerFlags (slot 7) bit-packing (design review item A)", () => {
+  const baseScalars = {
+    scrollCurrent: 0,
+    scrollVelocity: 0,
+    scrollProgress: 0,
+    pointerX: 0,
+    pointerY: 0,
+    pointerVX: 0,
+    pointerVY: 0,
+  };
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("round-trips pointerDown=%s pointerInside=%s independently", (pointerDown, pointerInside) => {
+    const packed = packFrameState({ ...baseScalars, pointerDown, pointerInside }, []);
+    const unpacked = unpackFrameState(packed);
+    expect(unpacked.pointerDown).toBe(pointerDown);
+    expect(unpacked.pointerInside).toBe(pointerInside);
+  });
+
+  it("packs both booleans into a single scalar slot (slot 7), not two extra floats", () => {
+    expect(SCALAR_SLOT_COUNT).toBe(8);
+    const packed = packFrameState({ ...baseScalars, pointerDown: true, pointerInside: true }, []);
+    expect(packed.length).toBe(8);
+    expect(packed[7]).toBe(3); // bit0 (down) | bit1 (inside)
   });
 });

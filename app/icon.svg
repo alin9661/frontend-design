@@ -1,0 +1,13 @@
+<svg width="64" height="64" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" rx="20" fill="#F9F9EE" />
+  <path
+    d="M50 6
+       C68 14 84 30 88 50
+       C90 60 88 70 82 78
+       C72 90 58 94 50 96
+       C42 94 28 90 18 78
+       C12 70 10 60 12 50
+       C16 30 32 14 50 6 Z"
+    fill="#1D423C"
+  />
+</svg>

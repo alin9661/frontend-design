@@ -18,8 +18,11 @@ import type { ScrollState } from "@/lib/engine/types";
 
 class FakeWindow extends EventTarget {
   scrollY = 0;
-  scrollTo = vi.fn((_x: number, y: number) => {
-    this.scrollY = y;
+  // Engine writes use the options form ({ top, behavior: "instant" }) so CSS
+  // scroll-behavior can't re-smooth them; keep the positional form working
+  // for any legacy callers.
+  scrollTo = vi.fn((a: number | ScrollToOptions, y?: number) => {
+    this.scrollY = typeof a === "number" ? (y ?? 0) : (a.top ?? 0);
   });
 }
 
@@ -142,9 +145,42 @@ describe("VirtualScroll — wheel accumulation", () => {
 
     expect(scroll.state.current).toBeGreaterThan(0);
     expect(scroll.state.current).toBeLessThan(500);
-    expect(el.scrollTo).toHaveBeenCalledWith(0, scroll.state.current);
+    expect(el.scrollTo).toHaveBeenCalledWith({ behavior: "instant", top: scroll.state.current });
     expect(el.scrollY).toBe(scroll.state.current);
 
+    scroll.destroy();
+  });
+
+  it("never writes to the document while idle (writes would cancel in-flight native smooth scrolls)", () => {
+    const ticker = new Ticker();
+    const el = new FakeWindow();
+    const scroll = new VirtualScroll(ticker, { el: el as unknown as Window });
+    scroll.resize(2000);
+
+    for (let i = 0; i < 30; i++) ticker.tick(16); // fully idle at 0
+
+    expect(el.scrollTo).not.toHaveBeenCalled();
+    scroll.destroy();
+  });
+
+  it("adopts a native smooth-scroll animation in progress instead of cancelling it", () => {
+    const ticker = new Ticker();
+    const el = new FakeWindow();
+    const scroll = new VirtualScroll(ticker, { el: el as unknown as Window });
+    scroll.resize(2000);
+
+    // Simulate the browser animating a PageDown under CSS scroll-behavior:
+    // smooth — scrollY creeps a few px per frame with no engine involvement.
+    for (const y of [8, 30, 90, 200, 350, 400, 400]) {
+      el.scrollY = y;
+      ticker.tick(16);
+    }
+
+    // The engine must have followed reality (divergence adoption) WITHOUT
+    // writing at all — any programmatic scrollTo cancels the still-running
+    // native animation, which is exactly the bug this guards against.
+    expect(scroll.state.current).toBe(400);
+    expect(el.scrollTo).not.toHaveBeenCalled();
     scroll.destroy();
   });
 

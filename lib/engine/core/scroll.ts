@@ -36,6 +36,18 @@ const DEFAULT_WHEEL_MULTIPLIER = 1;
  * rather than browser sub-pixel rounding of our own write. */
 const DIVERGENCE_EPSILON_PX = 1;
 
+/** Minimum damped-value change (px) worth writing back to the document.
+ * Writing while idle is not just wasted work: any programmatic scrollTo
+ * CANCELS an in-flight native smooth-scroll animation (keyboard PageDown,
+ * anchor jump under CSS `scroll-behavior: smooth`), which starved the
+ * divergence detector — external scrolls died before moving 1px. */
+const WRITE_EPSILON_PX = 0.5;
+
+/** Engine writes must bypass CSS `scroll-behavior: smooth` — damping is
+ * already applied by `step`, and letting the browser re-smooth each write
+ * turns our per-tick positions into competing async animations. */
+const INSTANT: ScrollToOptions = { behavior: "instant" as ScrollBehavior };
+
 export class VirtualScroll {
   private readonly ticker: Ticker;
   private readonly lambda: number;
@@ -96,7 +108,7 @@ export class VirtualScroll {
     const target = clamp(y, 0, this._state.limit);
     if (opts.immediate) {
       this._state = { ...this._state, target, current: target, velocity: 0 };
-      this.el.scrollTo(0, target);
+      this.el.scrollTo({ ...INSTANT, top: target });
       this.lastWrittenY = target;
     } else {
       this._state = { ...this._state, target };
@@ -147,13 +159,22 @@ export class VirtualScroll {
     if (Math.abs(actualY - this.lastWrittenY) > DIVERGENCE_EPSILON_PX) {
       // Something other than our own scrollTo moved the page (native touch
       // inertia, keyboard, anchor jump, find-in-page, screen reader...).
+      // Adopt reality AND treat it as our own last write: the position is
+      // already correct, so the write check below must stay a no-op — a
+      // write here would cancel the still-running native animation.
       this._state = { ...this._state, target: actualY, current: actualY, velocity: 0 };
+      this.lastWrittenY = actualY;
     }
 
     const next = VirtualScroll.step(this._state, dt, this.lambda);
     this._state = next;
-    this.el.scrollTo(0, next.current);
-    this.lastWrittenY = next.current;
+    // Only touch the document when our damped value actually moved: an
+    // idle engine must never write (each write cancels in-flight native
+    // smooth-scroll animations — see WRITE_EPSILON_PX).
+    if (Math.abs(next.current - this.lastWrittenY) > WRITE_EPSILON_PX) {
+      this.el.scrollTo({ ...INSTANT, top: next.current });
+      this.lastWrittenY = next.current;
+    }
     this.emitter.emit("scroll", next);
   }
 

@@ -3,7 +3,11 @@
 // CI bundle-size gate: after `bun run build`, asserts that each budgeted
 // route's "First Load JS" hasn't regressed past its budget. Exits non-zero
 // with a clear message on breach; run via `bun scripts/check-bundle.ts`
-// (see .github/workflows/test.yml's build job).
+// (see .github/workflows/test.yml's build job). Set the `NEXT_DIR`
+// environment variable to point at a different build output directory
+// (default `.next` at the repo root) — used by this file's own subprocess
+// test (test/scripts/check-bundle.test.ts) to run the real CLI against a
+// small fixture instead of a full `bun run build`.
 //
 // Approach (deterministic, no stdout scraping): `bun run build`'s printed
 // "First Load JS" table is ANSI-colored and column-formatted — parsing it
@@ -24,8 +28,13 @@ import { resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const NEXT_DIR = resolve(ROOT, ".next");
-const MANIFEST_PATH = resolve(NEXT_DIR, "app-build-manifest.json");
+
+/** Resolves the Next.js build output directory: `NEXT_DIR` env override if
+ * set (see this file's header comment), else `.next` at the repo root. */
+function resolveNextDir(): string {
+  const override = process.env.NEXT_DIR;
+  return override && override.length > 0 ? resolve(override) : resolve(ROOT, ".next");
+}
 
 // Budgets are in bytes, gzip-equivalent (see this file's header). Headroom
 // is intentional slack above the CURRENT measured size, not a target to
@@ -68,7 +77,20 @@ export function firstLoadJsBytes(nextDir: string, files: string[]): number {
   for (const rel of files) {
     if (!rel.endsWith(".js")) continue;
     const filePath = resolve(nextDir, rel);
-    const data = readFileSync(filePath);
+    let data: Buffer;
+    try {
+      data = readFileSync(filePath);
+    } catch (err) {
+      // Wrapped with the chunk's own relative path + resolved path (design
+      // review item E11) — a bare ENOENT only names the resolved path,
+      // which doesn't say WHICH manifest entry it came from; `checkBudgets`
+      // layers the route/manifest-key context on top of this.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `check-bundle: failed to read chunk "${rel}" (resolved to ${filePath}): ${detail}. ` +
+          `Did app-build-manifest.json list a chunk that's missing from a completed build?`
+      );
+    }
     total += gzipSync(data, { level: 9 }).length;
   }
   return total;
@@ -90,7 +112,15 @@ export function checkBudgets(
           `(route "${budget.route}"). Did the route get renamed/removed, or did the build fail?`
       );
     }
-    const measuredBytes = firstLoadJsBytes(nextDir, files);
+    let measuredBytes: number;
+    try {
+      measuredBytes = firstLoadJsBytes(nextDir, files);
+    } catch (err) {
+      // Layers route/manifest-key context on top of firstLoadJsBytes' own
+      // chunk-level detail (design review item E11).
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`check-bundle: route "${budget.route}" (manifest key "${budget.manifestKey}"): ${detail}`);
+    }
     return { ...budget, measuredBytes, ok: measuredBytes <= budget.budgetBytes };
   });
 }
@@ -100,16 +130,20 @@ function formatKb(bytes: number): string {
 }
 
 function main(): void {
-  if (!existsSync(MANIFEST_PATH)) {
+  const nextDir = resolveNextDir();
+  const manifestPath = resolve(nextDir, "app-build-manifest.json");
+
+  if (!existsSync(manifestPath)) {
     console.error(
-      `check-bundle: ${MANIFEST_PATH} not found — run "bun run build" first.\n` +
-        `(This script asserts bundle-size budgets against a completed Next.js build.)`
+      `check-bundle: ${manifestPath} not found — run "bun run build" first.\n` +
+        `(This script asserts bundle-size budgets against a completed Next.js build. ` +
+        `Set NEXT_DIR to point at a different build output directory.)`
     );
     process.exit(1);
   }
 
-  const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8")) as AppBuildManifest;
-  const results = checkBudgets(manifest, ROUTE_BUDGETS, NEXT_DIR);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as AppBuildManifest;
+  const results = checkBudgets(manifest, ROUTE_BUDGETS, nextDir);
 
   let anyBreach = false;
   for (const result of results) {

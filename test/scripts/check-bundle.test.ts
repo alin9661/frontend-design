@@ -8,12 +8,16 @@
 // that's what proves the CI wiring works; see this file's header comment
 // for the numbers measured against a real build.
 
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkBudgets, firstLoadJsBytes } from "@/scripts/check-bundle";
+
+const REPO_ROOT = resolve(import.meta.dirname, "../..");
 
 describe("firstLoadJsBytes", () => {
   let dir: string;
@@ -116,5 +120,91 @@ describe("checkBudgets", () => {
     expect(() =>
       checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir)
     ).toThrow(/no entry for "\/page"/);
+  });
+
+  it("design review item E11: wraps a missing chunk's read failure with route/manifest-key context on top of the chunk-level detail", () => {
+    const manifest = { pages: { "/page": ["does-not-exist.js"] } };
+    expect(() =>
+      checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir)
+    ).toThrow(/route "\/"[\s\S]*manifest key "\/page"[\s\S]*does-not-exist\.js/);
+  });
+});
+
+describe("firstLoadJsBytes — missing-chunk ENOENT context (design review item E11)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "check-bundle-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("wraps a missing chunk's read failure with the chunk's own relative path (not just a bare ENOENT)", () => {
+    expect(() => firstLoadJsBytes(dir, ["missing-chunk.js"])).toThrow(/missing-chunk\.js/);
+  });
+
+  it("still reports real chunks correctly alongside a later missing one (fails on the missing one, not silently)", () => {
+    writeFileSync(join(dir, "real.js"), "x".repeat(100));
+    expect(() => firstLoadJsBytes(dir, ["real.js", "missing.js"])).toThrow(/missing\.js/);
+  });
+});
+
+describe("check-bundle.ts CLI — subprocess against a fixture .next dir via NEXT_DIR (design review item E11)", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "check-bundle-cli-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function writeManifest(homeFiles: string[], deepWaveFiles: string[]): void {
+    writeFileSync(
+      join(dir, "app-build-manifest.json"),
+      JSON.stringify({ pages: { "/page": homeFiles, "/deep-wave/page": deepWaveFiles } })
+    );
+  }
+
+  function runCli(): { exitCode: number | null; stdout: string; stderr: string } {
+    // node:child_process, not Bun.spawnSync — the latter's global isn't
+    // available inside this project's vitest test context even though the
+    // suite itself runs under `bunx vitest` (verified empirically); spawning
+    // the real `bun scripts/check-bundle.ts` CLI as a subprocess is the part
+    // that matters here, not which spawn API does it.
+    const result = spawnSync("bun", ["scripts/check-bundle.ts"], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, NEXT_DIR: dir },
+      encoding: "utf8",
+    });
+    return { exitCode: result.status, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  it("exits 0 when every route is within its budget (real CLI process, NEXT_DIR override)", () => {
+    writeFileSync(join(dir, "home.js"), "x".repeat(100));
+    writeFileSync(join(dir, "deep-wave.js"), "y".repeat(100));
+    writeManifest(["home.js"], ["deep-wave.js"]);
+
+    const result = runCli();
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("all routes within budget");
+  });
+
+  it("exits 1 when a route breaches its budget (real CLI process, NEXT_DIR override)", () => {
+    // True random bytes are essentially incompressible — gzip can't shrink
+    // 300KB of these below the 165KB home-route budget, unlike the base36
+    // text tricks used elsewhere in this file for much smaller budgets.
+    writeFileSync(join(dir, "home.js"), randomBytes(300_000));
+    writeFileSync(join(dir, "deep-wave.js"), "y".repeat(100));
+    writeManifest(["home.js"], ["deep-wave.js"]);
+
+    const result = runCli();
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("exceeded their First Load JS budget");
   });
 });

@@ -23,7 +23,7 @@ import type {
   RendererLike,
 } from "../types";
 import type { RaycastCandidate } from "./raycast";
-import { View, type ViewOptions } from "./view";
+import { View, type ViewOptions, computeScissorRect } from "./view";
 
 export interface StageFrameInput {
   scroll: ScrollState;
@@ -66,7 +66,15 @@ export class Stage {
 
   addView(viewId: number, rect: RectData, module: SceneModule, opts?: ViewOptions): void {
     if (this.views.has(viewId)) {
-      throw new Error(`Stage.addView: view ${viewId} already exists`);
+      // Accurate as of the design review item B fix: both RenderHost
+      // implementations now invalidate a superseded `loadScene()` via a
+      // per-viewId generation counter before ever calling this (see
+      // host.ts's `MainThreadHost.viewGeneration` / render.worker.ts's
+      // `viewGeneration`), so this can only fire for a genuine caller bug —
+      // an `addView` for a viewId that was never `removeView`'d — not as a
+      // side effect of the VIEW_REMOVE-vs-async-load race that used to
+      // trigger it spuriously.
+      throw new Error(`Stage.addView: view ${viewId} already exists — call removeView(${viewId}) first`);
     }
     const view = new View(viewId, rect, module, opts);
     const managed: ManagedView = { view, ready: false };
@@ -110,7 +118,7 @@ export class Stage {
 
   /** Renders every in-view view into its scissored region, in insertion order. Skips off-screen views entirely. */
   render(): void {
-    const { width, height, dpr } = this.frame.size;
+    const { height, dpr } = this.frame.size;
     const viewportH = height;
     const scrollY = this.frame.scroll.current;
 
@@ -129,19 +137,32 @@ export class Stage {
       if (!managed.ready) continue; // not yet initialized — nothing to draw
       if (!view.inView(scrollY, viewportH, this.cullMargin)) continue;
 
-      const scissorX = Math.round(view.rect.left * dpr);
-      const scissorW = Math.round(view.rect.width * dpr);
-      const scissorH = Math.round(view.rect.height * dpr);
-      const topCss = view.rect.top - scrollY;
-      const scissorY = Math.round(height * dpr) - Math.round(topCss * dpr) - scissorH;
+      // Single source of truth for the document-rect -> device-pixel
+      // scissor/viewport math (design review item E3) — see gl/view.ts's
+      // `computeScissorRect` for the bottom-left-GL-origin flip derivation.
+      const scissor = computeScissorRect(view.rect, scrollY, height, dpr);
 
-      this.renderer.setScissor(scissorX, scissorY, scissorW, scissorH);
-      this.renderer.setViewport(scissorX, scissorY, scissorW, scissorH);
+      this.renderer.setScissor(scissor.x, scissor.y, scissor.width, scissor.height);
+      this.renderer.setViewport(scissor.x, scissor.y, scissor.width, scissor.height);
       this.renderer.render(view.scene, view.camera);
     }
   }
 
-  /** Re-runs every view's `init` (context-loss restore contract — see context-loss.ts). */
+  /**
+   * Re-runs every view's `init` (context-loss restore contract — see
+   * context-loss.ts). Deliberately does NOT reach into either RenderHost's
+   * per-view `ViewRaycaster` map to reset hover state (design review item
+   * F3/E10): while `managed.ready` is `false` here, `raycastCandidates()`
+   * excludes the view, so both hosts' shared `runViewRaycasts()` (see
+   * gl/raycast.ts) treats it exactly like any other view that temporarily
+   * stops being a candidate — its `ViewRaycaster` gets pruned (firing one
+   * final leave if it was mid-hover, same as a real `removeView()`) and,
+   * once the view becomes a candidate again post-restore (this method
+   * resolves and re-registers whatever `registerInteractive()` the re-run
+   * `init()` calls), a fresh `ViewRaycaster` is created with no stale hover
+   * state. No special-casing needed here — see `runViewRaycasts`' pruning
+   * logic for where this actually happens.
+   */
   async reinit(): Promise<void> {
     await Promise.all(
       Array.from(this.views.values()).map(async (managed) => {

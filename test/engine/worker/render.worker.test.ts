@@ -180,6 +180,50 @@ describe("render.worker.ts — SCENE_INVOKE routing", () => {
   });
 });
 
+describe("render.worker.ts — VIEW_REMOVE vs async loadScene race (design review item B)", () => {
+  beforeEach(() => {
+    (globalThis as unknown as { postMessage: typeof vi.fn }).postMessage = vi.fn();
+    sceneInit.mockClear();
+    sceneDispose.mockClear();
+  });
+
+  it("remove-before-load-resolves disposes the orphaned module instead of resurrecting the view, and a re-add of the same viewId works without an 'already exists' throw", async () => {
+    const onmessage = (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+    const rect: RectData = { top: 0, left: 0, width: 300, height: 300 };
+
+    onmessage({
+      data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+    } as MessageEvent);
+
+    // VIEW_ADD kicks off loadScene()'s real dynamic import (a pending
+    // microtask); VIEW_REMOVE for the SAME viewId lands synchronously right
+    // after, before that promise has any chance to resolve. On the pre-fix
+    // code, the eventual `.then()` callback would still register the
+    // now-removed view with Stage/moduleByView (a "zombie" view).
+    onmessage({ data: { type: "VIEW_ADD", viewId: 50, sceneId: "placeholder", rect } } as MessageEvent);
+    onmessage({ data: { type: "VIEW_REMOVE", viewId: 50 } } as MessageEvent);
+
+    // Flush the pending loadScene() resolution.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The orphaned module's own dispose() ran, but it was never handed to
+    // Stage — its init() (called only by Stage.addView) never ran.
+    expect(sceneDispose).toHaveBeenCalledTimes(1);
+    expect(sceneInit).not.toHaveBeenCalled();
+
+    // Re-adding the same viewId afterward must not throw "already exists"
+    // (Stage never actually held view 50) and must load/init cleanly.
+    sceneDispose.mockClear();
+    expect(() =>
+      onmessage({ data: { type: "VIEW_ADD", viewId: 50, sceneId: "placeholder", rect } } as MessageEvent)
+    ).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sceneInit).toHaveBeenCalledTimes(1);
+    expect(sceneDispose).not.toHaveBeenCalled();
+
+    onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Worker-side raycasting (design doc §4A): the RAF `tick()` loop runs
 // gl/raycast.ts's shared `runViewRaycasts()` (the SAME function
@@ -195,9 +239,24 @@ describe("render.worker.ts — raycast/HIT wiring (design doc §4A)", () => {
   let rafCallback: ((t: number) => void) | null = null;
   const RECT: RectData = { top: 0, left: 0, width: 300, height: 300 };
 
-  function frameState(pointerX: number, pointerY: number, viewId: number): Float32Array {
+  function frameState(
+    pointerX: number,
+    pointerY: number,
+    viewId: number,
+    opts: { down?: boolean; inside?: boolean } = {}
+  ): Float32Array {
     return packFrameState(
-      { scrollCurrent: 0, scrollVelocity: 0, scrollProgress: 0, pointerX, pointerY, pointerVX: 0, pointerVY: 0 },
+      {
+        scrollCurrent: 0,
+        scrollVelocity: 0,
+        scrollProgress: 0,
+        pointerX,
+        pointerY,
+        pointerVX: 0,
+        pointerVY: 0,
+        pointerDown: opts.down ?? false,
+        pointerInside: opts.inside ?? true,
+      },
       [{ viewId, ...RECT, progress: 0.5 }]
     );
   }
@@ -297,6 +356,94 @@ describe("render.worker.ts — raycast/HIT wiring (design doc §4A)", () => {
 
     expect(sceneOnPointer).not.toHaveBeenCalled();
     expect(postMessageSpy.mock.calls.some((c) => (c[0] as { type: string }).type === "HIT")).toBe(false);
+
+    onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RESIZE must retain the last-known scroll/pointer state (design review item
+// F4/F5). render.worker.ts's own RAF `tick()` loop calls `stage.render()`
+// every frame regardless of whether a fresh FRAME_STATE arrived that tick —
+// so unlike host.ts's MainThreadHost (which only ever renders from inside
+// `frame()`, always re-supplying real scroll first), a RESIZE-triggered
+// scroll reset here is directly visible on the very next independent RAF
+// tick, with no new FRAME_STATE in between. This suite drives that exact
+// sequence and uses in-view culling (Stage skips off-screen views entirely)
+// as the observable signal: a view whose rect only lands in-view at a
+// specific scrollY will stop rendering if that scrollY gets silently reset.
+// ---------------------------------------------------------------------------
+
+describe("render.worker.ts — RESIZE retains scroll state across ticks (design review item F4/F5)", () => {
+  let rafCallback: ((t: number) => void) | null = null;
+  // Document-space rect starting at y=1000 — only "in view" once scrolled
+  // down by roughly that much (see the scroll math in each assertion below).
+  const RECT: RectData = { top: 1000, left: 0, width: 300, height: 300 };
+
+  function frameStateAt(scrollCurrent: number, viewId: number): Float32Array {
+    return packFrameState(
+      {
+        scrollCurrent,
+        scrollVelocity: 0,
+        scrollProgress: 0.5,
+        pointerX: 0,
+        pointerY: 0,
+        pointerVX: 0,
+        pointerVY: 0,
+        pointerDown: false,
+        pointerInside: true,
+      },
+      [{ viewId, ...RECT, progress: 0.5 }]
+    );
+  }
+
+  beforeEach(() => {
+    rafCallback = null;
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((cb: (t: number) => void) => {
+        rafCallback = cb;
+        return 1;
+      })
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    sceneInit.mockReset();
+    sceneUpdate.mockReset();
+    sceneDispose.mockReset();
+    vi.mocked(rendererMock.render).mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a RESIZE with no new FRAME_STATE in between does not reset scroll back to 0 (view stays in view)", async () => {
+    const postMessageSpy = vi.fn();
+    (globalThis as unknown as { postMessage: typeof postMessageSpy }).postMessage = postMessageSpy;
+    const onmessage = (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+
+    onmessage({
+      data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+    } as MessageEvent);
+    onmessage({ data: { type: "RESIZE", width: 300, height: 300, dpr: 1 } } as MessageEvent);
+    onmessage({ data: { type: "VIEW_ADD", viewId: 80, sceneId: "placeholder", rect: RECT } } as MessageEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // flush loadScene()'s dynamic import
+
+    // scrollCurrent=800 puts RECT's viewport-relative top at 1000-800=200,
+    // inside the [0,300] viewport — in view.
+    onmessage({ data: { type: "FRAME_STATE", state: frameStateAt(800, 80) } } as MessageEvent);
+    rafCallback!(0);
+    expect(rendererMock.render).toHaveBeenCalledTimes(1); // sanity: in view, rendered
+
+    // A RESIZE arrives with NO new FRAME_STATE — on the pre-fix code,
+    // handleResize() called currentFrameInput() with no args, which
+    // defaulted scroll back to DEFAULT_SCROLL (current: 0), pushing RECT's
+    // viewport-relative top back to 1000 — well outside the viewport — so
+    // the very next independent RAF tick would stop rendering it entirely.
+    onmessage({ data: { type: "RESIZE", width: 320, height: 300, dpr: 1 } } as MessageEvent);
+    rafCallback!(16);
+
+    expect(rendererMock.render).toHaveBeenCalledTimes(2); // still in view — scroll was retained
 
     onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
   });

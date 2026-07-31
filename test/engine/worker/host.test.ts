@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
+import { Stage, type StageFrameInput } from "@/lib/engine/gl/stage";
 import type { RectData, RendererLike, ViewContext } from "@/lib/engine/types";
 import { packFrameState, SCALAR_SLOT_COUNT, type FrameStateView } from "@/lib/engine/worker/protocol";
 
@@ -57,9 +58,22 @@ const { createRenderHost, MainThreadHost, WorkerHost, supportsOffscreenWorkerRen
   "@/lib/engine/worker/host"
 );
 
-function makeFrameState(views: FrameStateView[]): Float32Array {
+function makeFrameState(
+  views: FrameStateView[],
+  pointer: { pointerDown?: boolean; pointerInside?: boolean } = {}
+): Float32Array {
   return packFrameState(
-    { scrollCurrent: 0, scrollVelocity: 0, scrollProgress: 0, pointerX: 0, pointerY: 0, pointerVX: 0, pointerVY: 0 },
+    {
+      scrollCurrent: 0,
+      scrollVelocity: 0,
+      scrollProgress: 0,
+      pointerX: 0,
+      pointerY: 0,
+      pointerVX: 0,
+      pointerVY: 0,
+      pointerDown: pointer.pointerDown ?? false,
+      pointerInside: pointer.pointerInside ?? true,
+    },
     views
   );
 }
@@ -250,6 +264,97 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
     host.destroy();
   });
 
+  it("design review item B: remove-before-load-resolves disposes the orphaned module instead of resurrecting the view, and a re-add of the same viewId works without an 'already exists' throw", async () => {
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+
+    // addView() kicks off loadScene()'s real dynamic import (a pending
+    // microtask) — removeView() for the SAME viewId lands synchronously
+    // right after, before that promise has any chance to resolve. On the
+    // pre-fix code, the eventual `.then()` callback would still register the
+    // now-removed view with Stage/moduleByView (a "zombie" view).
+    host.addView(40, "placeholder", PLACEHOLDER_RECT);
+    host.removeView(40);
+
+    // Flush the pending loadScene() resolution.
+    await vi.waitFor(() => expect(sceneDispose).toHaveBeenCalledTimes(1));
+    // The orphaned module's own dispose() ran, but it was never handed to
+    // Stage — its init() (called only by Stage.addView) never ran.
+    expect(sceneInit).not.toHaveBeenCalled();
+
+    // Re-adding the same viewId afterward must not throw "already exists"
+    // (Stage never actually held view 40) and must load/init cleanly.
+    sceneDispose.mockClear();
+    expect(() => host.addView(40, "placeholder", PLACEHOLDER_RECT)).not.toThrow();
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+    expect(sceneDispose).not.toHaveBeenCalled();
+
+    host.destroy();
+  });
+
+  it("design review item F4: resize() retains the last-known scroll/pointer state instead of resetting it to DEFAULTS", async () => {
+    // Records every StageFrameInput handed to Stage.setFrame() (init's
+    // initial frame, resize()'s, and frame()'s) so the exact scroll/pointer
+    // MainThreadHost fed Stage at each step is directly observable — the
+    // pre-fix bug was `resize()` calling `buildFrameInput()` with no args,
+    // which defaulted back to DEFAULT_SCROLL/DEFAULT_POINTER instead of
+    // retaining whatever a previous real `frame()` call had set.
+    class RecordingStage extends Stage {
+      readonly frames: StageFrameInput[] = [];
+      override setFrame(frame: StageFrameInput): void {
+        this.frames.push(frame);
+        super.setFrame(frame);
+      }
+    }
+    let capturedStage: RecordingStage | null = null;
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({
+      createRenderer: () => rendererMock,
+      createStage: (renderer, frame) => {
+        capturedStage = new RecordingStage(renderer, frame);
+        return capturedStage;
+      },
+    });
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1); // before any real frame() — nothing to retain yet, fine either way
+
+    const realFrame = packFrameState(
+      {
+        scrollCurrent: 500,
+        scrollVelocity: 12,
+        scrollProgress: 0.5,
+        pointerX: 0.3,
+        pointerY: -0.4,
+        pointerVX: 1,
+        pointerVY: 2,
+        pointerDown: true,
+        pointerInside: true,
+      },
+      []
+    );
+    host.frame(realFrame);
+    const framesAfterRealFrame = capturedStage!.frames.length;
+    expect(capturedStage!.frames.at(-1)!.scroll.current).toBe(500);
+    expect(capturedStage!.frames.at(-1)!.pointer.inside).toBe(true);
+
+    // A resize with NO new FRAME_STATE in between must retain that same
+    // scroll/pointer state, not reset it to DEFAULT_SCROLL/DEFAULT_POINTER.
+    host.resize(900, 700, 1);
+    expect(capturedStage!.frames.length).toBe(framesAfterRealFrame + 1);
+    const afterResize = capturedStage!.frames.at(-1)!;
+    expect(afterResize.scroll.current).toBe(500);
+    expect(afterResize.scroll.velocity).toBe(12);
+    expect(afterResize.pointer.x).toBeCloseTo(0.3, 5);
+    expect(afterResize.pointer.down).toBe(true);
+    expect(afterResize.pointer.inside).toBe(true);
+
+    host.destroy();
+  });
+
   it("frame() is a no-op before init() (no renderer/stage yet)", () => {
     const host = new MainThreadHost();
     expect(() => host.frame(makeFrameState([]))).not.toThrow();
@@ -333,9 +438,24 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
 describe("MainThreadHost — raycast/HIT wiring (design doc §4A)", () => {
   const FULL_RECT: RectData = { top: 0, left: 0, width: 800, height: 600 };
 
-  function packFrame(pointerX: number, pointerY: number, viewId: number): Float32Array {
+  function packFrame(
+    pointerX: number,
+    pointerY: number,
+    viewId: number,
+    opts: { down?: boolean; inside?: boolean } = {}
+  ): Float32Array {
     return packFrameState(
-      { scrollCurrent: 0, scrollVelocity: 0, scrollProgress: 0, pointerX, pointerY, pointerVX: 0, pointerVY: 0 },
+      {
+        scrollCurrent: 0,
+        scrollVelocity: 0,
+        scrollProgress: 0,
+        pointerX,
+        pointerY,
+        pointerVX: 0,
+        pointerVY: 0,
+        pointerDown: opts.down ?? false,
+        pointerInside: opts.inside ?? true,
+      },
       [{ viewId, ...FULL_RECT, progress: 0.5 }]
     );
   }
@@ -411,6 +531,120 @@ describe("MainThreadHost — raycast/HIT wiring (design doc §4A)", () => {
     expect(sceneOnPointer).toHaveBeenCalledTimes(2);
     expect(sceneOnPointer.mock.calls[1]![0]).toBeNull();
     expect(onMessage).toHaveBeenCalledWith({ type: "HIT", viewId: 20, hit: null });
+
+    host.destroy();
+  });
+
+  it("design review item A: a real down-edge in FRAME_STATE reaches SceneModule.onPointer through MainThreadHost (not the old hardcoded down:false)", async () => {
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1001);
+
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    sceneInit.mockImplementationOnce((ctx: ViewContext) => {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial());
+      ctx.scene.add(mesh);
+      ctx.registerInteractive?.([mesh]);
+      ctx.camera.updateMatrixWorld();
+    });
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1);
+    host.addView(22, "placeholder", FULL_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+
+    // Enter hover first (down:false) — on the pre-fix code this was the ONLY
+    // reachable state (down was always hardcoded false), so onPointer could
+    // never observe a down-edge at all.
+    host.frame(packFrame(0, 0, 22, { down: false }));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(1);
+
+    // Same hover target, now with down:true — a real down-edge while
+    // hovering must reach onPointer again (gl/raycast.ts's ViewRaycaster
+    // fires on down-edge even with no hover-state change).
+    host.frame(packFrame(0, 0, 22, { down: true }));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(2);
+    expect(sceneOnPointer.mock.calls[1]![0]).not.toBeNull();
+
+    host.destroy();
+  });
+
+  it("design review item A: pointerInside:false forces a hover leave through the host even at an NDC that would otherwise hit", async () => {
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1001);
+
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    sceneInit.mockImplementationOnce((ctx: ViewContext) => {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial());
+      ctx.scene.add(mesh);
+      ctx.registerInteractive?.([mesh]);
+      ctx.camera.updateMatrixWorld();
+    });
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1);
+    host.addView(23, "placeholder", FULL_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+
+    host.frame(packFrame(0, 0, 23, { inside: true }));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(1);
+    expect(sceneOnPointer.mock.calls[0]![0]).not.toBeNull();
+
+    // Same centered NDC, but pointerInside:false (pointer left the viewport
+    // entirely) — on the pre-fix code `inside` was hardcoded `true`, so this
+    // transition could never be observed; runViewRaycasts gates targets on
+    // `pointer.inside` (see gl/raycast.ts), forcing a leave here.
+    onMessage.mockClear();
+    host.frame(packFrame(0, 0, 23, { inside: false }));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(2);
+    expect(sceneOnPointer.mock.calls[1]![0]).toBeNull();
+    expect(onMessage).toHaveBeenCalledWith({ type: "HIT", viewId: 23, hit: null });
+
+    host.destroy();
+  });
+
+  it("design review item A: no spurious enter before any real pointer event — the initial default FRAME_STATE (pointerInside:false) must not hit a dead-center target", async () => {
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    sceneInit.mockImplementationOnce((ctx: ViewContext) => {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial());
+      ctx.scene.add(mesh);
+      ctx.registerInteractive?.([mesh]);
+      ctx.camera.updateMatrixWorld();
+    });
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1);
+    host.addView(24, "placeholder", FULL_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+
+    // NDC (0,0) is dead-center of the huge plane — would hit if `inside`
+    // were (incorrectly) true, matching core/pointer.ts's PointerTracker,
+    // which starts `inside: false` until the first real pointermove/enter.
+    host.frame(packFrame(0, 0, 24, { inside: false }));
+    expect(sceneOnPointer).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "HIT" }));
 
     host.destroy();
   });

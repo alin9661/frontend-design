@@ -7,7 +7,14 @@
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
-import { ViewRaycaster, pointerUniformValues, runViewRaycasts, type RaycastCandidate } from "@/lib/engine/gl/raycast";
+import {
+  ViewRaycaster,
+  getInstanceIndexMap,
+  pointerUniformValues,
+  runViewRaycasts,
+  setInstanceIndexMap,
+  type RaycastCandidate,
+} from "@/lib/engine/gl/raycast";
 import type { PointerHit, PointerState, RectData, SceneModule } from "@/lib/engine/types";
 
 function makeCameraAndTarget() {
@@ -72,6 +79,30 @@ describe("ViewRaycaster", () => {
     expect(onPointer).toHaveBeenCalledTimes(2);
   });
 
+  it("design review item E9: wouldCast reports whether the throttle window has elapsed, independent of update()", () => {
+    const raycaster = new ViewRaycaster({ throttleMs: 100 });
+    expect(raycaster.wouldCast(0)).toBe(true); // never cast yet — always true
+
+    const { camera, mesh } = makeCameraAndTarget();
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 0, down: false }, vi.fn());
+
+    expect(raycaster.wouldCast(50)).toBe(false); // within the throttle window
+    expect(raycaster.wouldCast(100)).toBe(true); // exactly at the window edge
+    expect(raycaster.wouldCast(150)).toBe(true); // past it
+  });
+
+  it("design review item F3/E10: hovering reflects the current hit state and clears on dispose()", () => {
+    const { camera, mesh } = makeCameraAndTarget();
+    const raycaster = new ViewRaycaster();
+    expect(raycaster.hovering).toBe(false);
+
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 0, down: false }, vi.fn());
+    expect(raycaster.hovering).toBe(true);
+
+    raycaster.dispose();
+    expect(raycaster.hovering).toBe(false);
+  });
+
   it("fires onPointer on a down-edge while hovering (click impulse), even with no hover-state change", () => {
     const { camera, mesh } = makeCameraAndTarget();
     const raycaster = new ViewRaycaster();
@@ -81,6 +112,48 @@ describe("ViewRaycaster", () => {
     raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 16, down: true }, onPointer); // down edge
 
     expect(onPointer).toHaveBeenCalledTimes(2);
+  });
+
+  it("design review item E12: a held-down pointer (wasDown already true) does not re-fire onPointer every frame — only the down EDGE does", () => {
+    const { camera, mesh } = makeCameraAndTarget();
+    const raycaster = new ViewRaycaster();
+    const onPointer = vi.fn();
+
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 0, down: false }, onPointer); // enter
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 16, down: true }, onPointer); // down edge
+    expect(onPointer).toHaveBeenCalledTimes(2);
+
+    // Still down, still hovering the same target, several more frames —
+    // `wasDown` is already true so this must NOT refire (only the initial
+    // down EDGE does).
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 32, down: true }, onPointer);
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 48, down: true }, onPointer);
+    raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 64, down: true }, onPointer);
+    expect(onPointer).toHaveBeenCalledTimes(2); // unchanged — held-down, no refire
+  });
+
+  it("design review item E12: resolveInstanceId falls back to the raw local instanceId when the object never opted into an instanceIndexMap", () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    camera.position.z = 5;
+    camera.lookAt(0, 0, 0);
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial(), 1);
+    mesh.setMatrixAt(0, new THREE.Matrix4());
+    // Deliberately no setInstanceIndexMap() call.
+
+    const raycaster = new ViewRaycaster();
+    const hit = raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 0, down: false });
+
+    expect(hit).not.toBeNull();
+    expect(hit!.instanceId).toBe(0); // raw local index, unmapped
+  });
+
+  it("design review item E12: resolveInstanceId is undefined for a plain (non-instanced) Mesh hit", () => {
+    const { camera, mesh } = makeCameraAndTarget();
+    const raycaster = new ViewRaycaster();
+    const hit = raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 0, down: false });
+
+    expect(hit).not.toBeNull();
+    expect(hit!.instanceId).toBeUndefined();
   });
 });
 
@@ -171,6 +244,55 @@ describe("runViewRaycasts", () => {
     expect(raycasters.has(5)).toBe(false);
   });
 
+  it("design review item F3/E10: pruning a view that's currently mid-hover fires one final leave (onHit + module.onPointer) instead of silently dropping it", () => {
+    const onPointer = vi.fn();
+    const onHit = vi.fn();
+    const { candidate } = makeCandidate(40, fakeModule(onPointer));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    // Centered pointer -> hover enter.
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters, onHit });
+    expect(onPointer).toHaveBeenCalledTimes(1);
+    expect(onPointer.mock.calls[0]![0]).not.toBeNull();
+
+    // The view is removed (no longer a candidate) while still hovering.
+    onPointer.mockClear();
+    onHit.mockClear();
+    runViewRaycasts({ candidates: [], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 1000, raycasters, onHit });
+
+    expect(raycasters.has(40)).toBe(false);
+    expect(onPointer).toHaveBeenCalledTimes(1);
+    expect(onPointer.mock.calls[0]![0]).toBeNull();
+    expect(onHit).toHaveBeenCalledWith(40, null);
+  });
+
+  it("design review item F3/E10: pruning a view that was never hovering fires no leave (nothing to report)", () => {
+    const onPointer = vi.fn();
+    const onHit = vi.fn();
+    // Off-target from the start — candidate never actually hovers.
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    camera.position.z = 5;
+    camera.lookAt(0, 0, 0);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial());
+    const candidate: RaycastCandidate = { viewId: 41, rect: RECT, camera, targets: [mesh], module: fakeModule(onPointer) };
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 5, y: 5, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters, onHit });
+    expect(onPointer).not.toHaveBeenCalled();
+
+    runViewRaycasts({ candidates: [], pointer: { x: 5, y: 5, down: false, inside: true }, scrollY: 0, size: SIZE, now: 1000, raycasters, onHit });
+    expect(onPointer).not.toHaveBeenCalled();
+    expect(onHit).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op with zero allocation-worthy work when both candidates and raycasters are empty", () => {
+    const raycasters = new Map<number, ViewRaycaster>();
+    expect(() =>
+      runViewRaycasts({ candidates: [], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters })
+    ).not.toThrow();
+    expect(raycasters.size).toBe(0);
+  });
+
   it("each registered view is independent — a hit in view A doesn't affect view B's hover state", () => {
     const onPointerA = vi.fn();
     const onPointerB = vi.fn();
@@ -185,13 +307,13 @@ describe("runViewRaycasts", () => {
     expect(raycasters.size).toBe(2);
   });
 
-  it("remaps InstancedMesh instanceId through userData.instanceIndexMap into the reported hit (multi-target global index)", () => {
+  it("remaps InstancedMesh instanceId through setInstanceIndexMap()/getInstanceIndexMap() into the reported hit (multi-target global index)", () => {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
     camera.position.z = 5;
     camera.lookAt(0, 0, 0);
     const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial(), 1);
     mesh.setMatrixAt(0, new THREE.Matrix4());
-    mesh.userData.instanceIndexMap = [777];
+    setInstanceIndexMap(mesh, [777]);
 
     let seenHit: PointerHit | null | undefined;
     const module = fakeModule((hit) => {
@@ -210,6 +332,22 @@ describe("runViewRaycasts", () => {
 
     expect(seenHit).not.toBeNull();
     expect(seenHit?.instanceId).toBe(777);
+  });
+});
+
+describe("setInstanceIndexMap / getInstanceIndexMap (design review item E6)", () => {
+  it("round-trips a local-index -> global-index map on an object's userData", () => {
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial(), 3);
+    expect(getInstanceIndexMap(mesh)).toBeUndefined();
+
+    setInstanceIndexMap(mesh, [10, 20, 30]);
+    expect(getInstanceIndexMap(mesh)).toEqual([10, 20, 30]);
+  });
+
+  it("works on any Object3D, not just InstancedMesh", () => {
+    const group = new THREE.Group();
+    setInstanceIndexMap(group, [5]);
+    expect(getInstanceIndexMap(group)).toEqual([5]);
   });
 });
 

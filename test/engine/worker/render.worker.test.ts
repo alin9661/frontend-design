@@ -16,6 +16,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RectData, RendererLike } from "@/lib/engine/types";
+import { createRenderer } from "@/lib/engine/gl/renderer";
 
 function makeRendererMock(): RendererLike {
   return {
@@ -76,6 +77,37 @@ describe("render.worker.ts — INIT handler asset wiring", () => {
   beforeEach(() => {
     postMessageSpy = vi.fn();
     (globalThis as unknown as { postMessage: typeof postMessageSpy }).postMessage = postMessageSpy;
+  });
+
+  it("BUG B1 regression: renderer construction failure posts INIT_FAILED instead of hanging forever (no READY, no throw)", () => {
+    // On the old code, a throw from createRenderer() (e.g. real WebGL2
+    // context creation failing in a headless/SwiftShader environment) was
+    // uncaught inside this onmessage handler: nothing was posted back, so
+    // WorkerHost.init()'s `ready` promise (awaiting a "READY" message) hung
+    // forever and EngineProvider stayed stuck at status "loading" 0% with
+    // the LoadingScreen covering the page permanently. This assertion fails
+    // on the pre-fix code (the throw escapes onmessage uncaught instead of
+    // being turned into a message).
+    vi.mocked(createRenderer).mockImplementationOnce(() => {
+      throw new Error("WebGL2 context creation failed");
+    });
+
+    const onmessage = (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+
+    expect(() =>
+      onmessage({
+        data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+      } as MessageEvent)
+    ).not.toThrow();
+
+    expect(postMessageSpy).toHaveBeenCalledWith({
+      type: "INIT_FAILED",
+      error: "WebGL2 context creation failed",
+    });
+    expect(postMessageSpy).not.toHaveBeenCalledWith({ type: "READY" });
+
+    // No RAF loop was started (handleInit returned before startTicking()),
+    // so there is nothing to tear down here.
   });
 
   it("regression: INIT with zero registered assets still posts ASSETS_DONE (LoadingScreen must resolve)", () => {

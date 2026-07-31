@@ -58,6 +58,31 @@ describe("app/deep-wave/page", () => {
     }
   });
 
+  it("BUG B3 regression: no section carries an opaque bg-* class directly — each has a dedicated -z-10 background layer instead", () => {
+    // The shared GL <canvas> (fixed, z-0, rendered before every section) is
+    // a sibling of these sections. A `<section className="relative bg-*">`
+    // has no z-index of its own, so CSS's painting order puts the WHOLE
+    // section — including a background painted directly on it — in the same
+    // stacking group as the canvas, ordered strictly by DOM position (later
+    // wins). An opaque `bg-cream`/`bg-forest` class directly on the section
+    // fully occluded the canvas: DRAW CALLS were non-zero but nothing was
+    // ever visible. Each section now keeps its background in a separate
+    // `-z-10` div that escapes to the page's root stacking context (painted
+    // well before the canvas), while the section's own (now-transparent)
+    // box still paints after the canvas so its content stays visible.
+    const { container } = render(<DeepWavePage />);
+
+    for (const id of ["hero", "anatomy", "energy", "attention", "lounge", "picker"]) {
+      const section = container.querySelector(`section#${id}`);
+      expect(section).not.toBeNull();
+      expect(section!.className).not.toMatch(/(?:^|\s)bg-(?:cream|forest)(?:\s|$)/);
+
+      const bgLayer = section!.querySelector('[aria-hidden="true"].bg-cream, [aria-hidden="true"].bg-forest');
+      expect(bgLayer, `section#${id} is missing its -z-10 background layer`).not.toBeNull();
+      expect(bgLayer!.className).toMatch(/-z-10/);
+    }
+  });
+
   it("shows a loading overlay while the engine boots, and dismisses it once ready — never removing the content underneath", async () => {
     render(<DeepWavePage />);
 

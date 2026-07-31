@@ -93,5 +93,14 @@ export function createRenderer(opts: RendererOptions): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer(resolveRendererParams(opts));
   renderer.autoClear = false;
   renderer.setScissorTest(true);
+  // Stage renders multiple views (one THREE.WebGLRenderer.render() call per
+  // in-view scissored view) per Stage.render() invocation. WebGLRenderer's
+  // default `info.autoReset` resets the draw-call counter at the START of
+  // EVERY render() call, so reading `info.render.calls` afterward would only
+  // ever reflect the LAST view's calls. Disabling autoReset lets gl/stage.ts
+  // reset once per Stage.render() and accumulate the true per-frame total —
+  // what the `?debug` HUD's "draw calls" row (worker/host.ts's STATS
+  // message) actually reports.
+  renderer.info.autoReset = false;
   return renderer;
 }

@@ -3,111 +3,44 @@
 // Dedicated depth-sort worker for SplatMesh (design doc §4B). Splats must be
 // drawn back-to-front for correct alpha blending, and re-sorting ~100k
 // indices by camera-relative depth every frame is exactly the kind of work
-// that should happen off the render thread. Two things live in this one
-// file, deliberately:
+// that should happen off the render thread.
 //
-// - `sortIndices(positions, viewMatrix)` — a PURE, synchronous function
-//   (design doc: "ALSO export the pure sortIndices... fallback used
-//   synchronously when Worker is unavailable and by tests"). A 16-bit
-//   quantized counting sort: O(n), stable-ish, and cheap enough to run
-//   synchronously as SplatMesh's no-Worker-support fallback.
-// - The dedicated-worker wiring (`self.onmessage`) that calls the exact same
-//   `sortIndices` function, so the worker and synchronous-fallback code
-//   paths can never disagree on results — only on which thread runs them.
-//   Mirrors worker/render.worker.ts's `WorkerScope` cast pattern (this
-//   project's convention for typing a dedicated-worker global without
-//   conflicting with the "dom" lib's `self`/`postMessage` declarations).
+// BUG B2 root cause (fixed here): the pure `sortIndices`/`computeViewDepths`
+// functions used to live in THIS file, and SplatMesh.ts imported them from
+// here (`import { sortIndices } from "./sort.worker"`) as its no-Worker
+// fallback. That's fine on the main thread or in tests — but scene modules
+// are also lazy-loaded INSIDE worker/render.worker.ts's own OffscreenCanvas
+// worker (splat-lounge's scene.ts -> SplatMesh.ts -> this file, all
+// dynamically imported by scene-registry.ts's loadScene()). `self` there IS
+// a real worker global scope, so this file's `typeof WorkerGlobalScope !==
+// "undefined"` guard was ALSO true — evaluating this module inside
+// render.worker.ts's bundle silently overwrote render.worker.ts's own
+// `ctx.onmessage` (installed at its own module top level, long before any
+// scene lazy-loads) with the dedicated-sort-worker handler below. From that
+// moment on every real message to the render worker (FRAME_STATE, sent every
+// tick regardless of scroll position) fell through this handler's "not
+// INIT/SORT" path and hit the `storedPositions` guard, logging "SORT
+// received before INIT — dropping request" every frame — even with the
+// splats section scrolled off-screen, because FRAME_STATE never stops.
 //
-// SplatMesh.ts creates this worker via
-// `new Worker(new URL("./sort.worker.ts", import.meta.url))` (static
-// specifier required for Next/webpack worker bundling, same as
-// worker/host.ts's `render.worker.ts` construction) and falls back to
-// calling `sortIndices` synchronously when `typeof Worker === "undefined"`.
+// Fix: the pure math now lives in ./sort-core.ts (zero side effects, safe to
+// import from anywhere). SplatMesh.ts imports `sortIndices` from there
+// instead of from this file, so this file — the one with the
+// worker-bootstrap side effect — is now ONLY ever evaluated as the dedicated
+// sort worker's own entry script (via `new Worker(new URL("./sort.worker.ts",
+// import.meta.url))`), never as a transitive import inside another worker's
+// bundle. `sortIndices`/`computeViewDepths` are re-exported below purely so
+// existing imports of `"./sort.worker"` (e.g. this file's own tests) keep
+// working unchanged.
+//
+// Mirrors worker/render.worker.ts's `WorkerScope` cast pattern (this
+// project's convention for typing a dedicated-worker global without
+// conflicting with the "dom" lib's `self`/`postMessage` declarations).
 
 import * as THREE from "three";
+import { computeViewDepths, sortIndices } from "./sort-core";
 
-/** 16-bit quantization buckets — enough resolution that ties are visually irrelevant. */
-const QUANT_BITS = 16;
-const QUANT_LEVELS = 1 << QUANT_BITS; // 65536
-
-/**
- * View-space depth (more negative = farther from camera, matching three.js's
- * -Z-forward camera convention) for every splat position, via `viewMatrix`
- * (typically `camera.matrixWorldInverse`, already up to date when the
- * caller calls `camera.updateMatrixWorld()` first).
- */
-export function computeViewDepths(
-  positions: Float32Array,
-  viewMatrix: THREE.Matrix4,
-  count: number = positions.length / 3
-): Float32Array {
-  const e = viewMatrix.elements; // column-major: row 2 (z row) is e[2], e[6], e[10], e[14]
-  const depths = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    const x = positions[i * 3 + 0]!;
-    const y = positions[i * 3 + 1]!;
-    const z = positions[i * 3 + 2]!;
-    depths[i] = e[2]! * x + e[6]! * y + e[10]! * z + e[14]!;
-  }
-  return depths;
-}
-
-/**
- * Back-to-front (far-first) index order for `positions` as seen from
- * `viewMatrix`, via a 16-bit quantized counting sort over view-space depth.
- * O(n): one pass to find the depth range, one to bucket, one prefix sum, one
- * scatter — no comparison sort, no allocation proportional to n*log(n).
- *
- * Ties within the same quantization bucket keep their original relative
- * order (the scatter pass processes indices 0..count-1 in order and appends
- * within each bucket's slot range), so results are deterministic and stable.
- *
- * `out`, when provided with the right length, is written into and returned
- * instead of allocating a new Uint32Array — this is the "ping-pong" buffer
- * reuse the design doc calls for: the dedicated worker and SplatMesh trade
- * ownership of two index buffers back and forth via transfer instead of
- * allocating a fresh result every sort.
- */
-export function sortIndices(positions: Float32Array, viewMatrix: THREE.Matrix4, out?: Uint32Array): Uint32Array {
-  const count = positions.length / 3;
-  const result = out && out.length === count ? out : new Uint32Array(count);
-  if (count === 0) return result;
-
-  const depths = computeViewDepths(positions, viewMatrix, count);
-
-  let min = Infinity;
-  let max = -Infinity;
-  for (let i = 0; i < count; i++) {
-    const d = depths[i]!;
-    if (d < min) min = d;
-    if (d > max) max = d;
-  }
-  const range = max - min || 1e-6;
-
-  const buckets = new Uint16Array(count);
-  for (let i = 0; i < count; i++) {
-    const t = (depths[i]! - min) / range; // 0 = farthest, 1 = nearest
-    buckets[i] = Math.min(QUANT_LEVELS - 1, Math.max(0, Math.round(t * (QUANT_LEVELS - 1))));
-  }
-
-  const counts = new Uint32Array(QUANT_LEVELS);
-  for (let i = 0; i < count; i++) counts[buckets[i]!]!++;
-
-  const offsets = new Uint32Array(QUANT_LEVELS);
-  let sum = 0;
-  for (let b = 0; b < QUANT_LEVELS; b++) {
-    offsets[b] = sum;
-    sum += counts[b]!;
-  }
-
-  const cursor = offsets.slice();
-  for (let i = 0; i < count; i++) {
-    const b = buckets[i]!;
-    result[cursor[b]!++] = i;
-  }
-
-  return result;
-}
+export { computeViewDepths, sortIndices };
 
 // ---------------------------------------------------------------------------
 // Dedicated-worker message protocol (internal to gl/splats/ — this is not
@@ -166,23 +99,42 @@ declare const WorkerGlobalScope: unknown;
 if (typeof WorkerGlobalScope !== "undefined") {
   const ctx = self as unknown as SortWorkerScope;
   let storedPositions: Float32Array | null = null;
+  // BUG B2 handshake hardening: INIT is always posted synchronously right
+  // after this worker is constructed (SplatMesh.ts's initSortWorker()), and
+  // postMessage delivery to the same worker preserves order, so a genuine
+  // SORT-before-INIT race shouldn't happen in practice — the flood this
+  // guarded against was actually the cross-import hijack fixed above. Still,
+  // rather than silently dropping (and noisily console.error-ing) a request
+  // that arrives before INIT for any other reason, keep only the latest one
+  // (matches render.worker.ts's "only the newest FRAME_STATE" convention)
+  // and run it as soon as INIT lands instead of losing the re-sort.
+  let pendingRequest: SortRequest | null = null;
+
+  function runSort(msg: SortRequest, positions: Float32Array): void {
+    const start = now();
+    const viewMatrix = new THREE.Matrix4().fromArray(msg.viewMatrixElements);
+    const indices = sortIndices(positions, viewMatrix, msg.previousIndices);
+    const sortMs = now() - start;
+    ctx.postMessage({ type: "SORTED", requestId: msg.requestId, indices, sortMs }, [indices.buffer]);
+  }
 
   ctx.onmessage = (ev: MessageEvent<SortWorkerRequest>) => {
     const msg = ev.data;
     if (msg.type === "INIT") {
       storedPositions = msg.positions;
+      if (pendingRequest) {
+        const queued = pendingRequest;
+        pendingRequest = null;
+        runSort(queued, storedPositions);
+      }
       return;
     }
 
     if (!storedPositions) {
-      console.error("[deep-wave splat sort worker] SORT received before INIT — dropping request");
+      pendingRequest = msg;
       return;
     }
 
-    const start = now();
-    const viewMatrix = new THREE.Matrix4().fromArray(msg.viewMatrixElements);
-    const indices = sortIndices(storedPositions, viewMatrix, msg.previousIndices);
-    const sortMs = now() - start;
-    ctx.postMessage({ type: "SORTED", requestId: msg.requestId, indices, sortMs }, [indices.buffer]);
+    runSort(msg, storedPositions);
   };
 }

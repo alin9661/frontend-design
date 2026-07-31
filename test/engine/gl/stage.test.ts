@@ -155,6 +155,34 @@ describe("Stage.render — culling + render order", () => {
     expect(scissorXs).toEqual([0, 200, 400]);
   });
 
+  it("resets renderer.info once per render() call when present, so a real THREE draw-call count accumulates across every view instead of reflecting only the last one (BUG B3 stats fix)", async () => {
+    const renderer = mockRenderer();
+    let resetCalls = 0;
+    (renderer as RendererLike).info = {
+      autoReset: true,
+      reset: () => {
+        resetCalls++;
+      },
+      render: { calls: 0 },
+    };
+    const stage = new Stage(renderer, baseFrame());
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, trackedScene());
+    stage.addView(2, { top: 0, left: 200, width: 100, height: 100 }, trackedScene());
+    await flush();
+
+    stage.render();
+    expect(resetCalls).toBe(1); // once per Stage.render(), not once per view
+  });
+
+  it("does not throw when renderer.info is absent (plain RendererLike mocks, the common test double)", async () => {
+    const renderer = mockRenderer(); // no .info set
+    const stage = new Stage(renderer, baseFrame());
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, trackedScene());
+    await flush();
+
+    expect(() => stage.render()).not.toThrow();
+  });
+
   it("skips a view whose module has not finished init() yet", () => {
     const renderer = mockRenderer();
     const stage = new Stage(renderer, baseFrame());

@@ -34,8 +34,21 @@ export default function SectionHero() {
       ref={viewRef}
       id="hero"
       aria-labelledby="deep-wave-hero-heading"
-      className="relative flex min-h-svh flex-col items-center justify-center overflow-hidden bg-cream px-6 text-center text-forest"
+      className="relative flex min-h-svh flex-col items-center justify-center overflow-hidden px-6 text-center text-forest"
     >
+      {/* Background lives in its own negative-z layer, NOT as this section's
+          own background: EngineProvider's shared <GlCanvas/> is a `fixed
+          z-0` sibling rendered before every section in the DOM, and this
+          `<section>` is itself `position:relative` with no z-index of its
+          own — which (per CSS's painting order) puts the WHOLE section,
+          including a background painted directly on it, in the same
+          stacking group as the canvas, ordered after it (later in the DOM
+          wins). An opaque `bg-*` class here would fully occlude the GL
+          layer. This `-z-10` div escapes to the page's root stacking
+          context instead (painted well before the canvas), so the can
+          renders visibly behind the (still fully opaque, still GL-less
+          readable) text below. */}
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-cream" />
       {/* GL view host renders behind this content via EngineProvider's
           single shared <GlCanvas/> — nothing to mount per-section. */}
       <p className="font-body text-xs uppercase tracking-[0.35em] text-forest/60">

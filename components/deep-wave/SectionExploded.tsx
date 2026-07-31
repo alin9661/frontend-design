@@ -40,8 +40,13 @@ export default function SectionExploded() {
       ref={viewRef}
       id="anatomy"
       aria-labelledby="deep-wave-exploded-heading"
-      className="relative min-h-svh bg-forest px-6 py-32 text-cream"
+      className="relative min-h-svh px-6 py-32 text-cream"
     >
+      {/* Background lives in its own negative-z layer so the shared GL
+          canvas (fixed z-0, rendered before every section) shows through
+          instead of being occluded by this section's own background — see
+          SectionHero.tsx's comment for the full stacking-order rationale. */}
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-forest" />
       {/* The exploded-can view renders behind this copy via EngineProvider's
           shared canvas; onProgress(p) drives lib/scenes/exploded/scene.ts's
           Timeline as this section scrolls through view. */}

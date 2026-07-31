@@ -106,6 +106,17 @@ export interface RendererLike {
   render(scene: THREE.Scene, camera: THREE.Camera): void;
   dispose(): void;
   domElement?: HTMLCanvasElement | OffscreenCanvas;
+  /**
+   * Optional: THREE.WebGLRenderer's real draw-call counter (design doc §6
+   * `?debug` HUD's "draw calls" row). Additive/optional so existing
+   * `RendererLike` test mocks (which never set this) remain valid — Stage
+   * simply skips the reset/read when it's absent.
+   */
+  info?: {
+    autoReset: boolean;
+    reset(): void;
+    render: { calls: number };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +163,14 @@ export interface SceneModule {
   invoke?(method: string, args: unknown[]): void; // cross-thread scene RPC (picker select etc.)
   resize?(w: number, h: number): void;
   dispose(): void; // MUST free geometries/materials/targets
+  /**
+   * Optional, additive: scene-reported stats for the `?debug` HUD's STATS
+   * channel (design doc §6). Only splat-lounge implements this today
+   * (surfacing SplatMesh.stats); both RenderHost implementations sum this
+   * across every registered view instead of hardcoding `splats`/`sortMs` to
+   * 0 (see the gap documented in components/deep-wave/SectionSplats.tsx).
+   */
+  getStats?(): { splats?: number; sortMs?: number } | void;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +295,20 @@ export interface ContextRestoredMessage {
   type: "CONTEXT_RESTORED";
 }
 
+/**
+ * Additive (post-freeze) variant — see docs/deep-wave-engine-design.md's bug
+ * B1 fix notes. Posted by render.worker.ts's INIT handler when constructing
+ * the renderer/Stage throws (e.g. WebGL2 context creation fails), so
+ * WorkerHost.init()'s `ready` promise rejects instead of hanging forever
+ * awaiting a READY that will never arrive — without this, EngineProvider
+ * stays stuck at status "loading" 0% with the LoadingScreen covering the
+ * page permanently.
+ */
+export interface InitFailedMessage {
+  type: "INIT_FAILED";
+  error: string;
+}
+
 export type WorkerToMain =
   | ReadyMessage
   | AssetProgressMessage
@@ -283,7 +316,8 @@ export type WorkerToMain =
   | HitMessage
   | StatsMessage
   | ContextLostMessage
-  | ContextRestoredMessage;
+  | ContextRestoredMessage
+  | InitFailedMessage;
 
 // ---------------------------------------------------------------------------
 // worker/host.ts — main-thread facade (RenderHost)

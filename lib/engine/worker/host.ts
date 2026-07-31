@@ -74,11 +74,21 @@ export class WorkerHost implements RenderHost {
     worker.addEventListener("message", this.handleMessage);
 
     const offscreen = canvas.transferControlToOffscreen();
-    const ready = new Promise<void>((resolve) => {
+    // BUG B1 fix: the worker can fail to construct its renderer (real WebGL2
+    // context creation throwing — headless/SwiftShader environments) and
+    // posts the additive INIT_FAILED message instead of READY in that case
+    // (see render.worker.ts's handleInit() and types.ts's InitFailedMessage).
+    // Without this branch, `ready` awaited READY forever and this whole
+    // init() promise never settled, leaving EngineProvider stuck at status
+    // "loading" 0% with the LoadingScreen covering the page permanently.
+    const ready = new Promise<void>((resolve, reject) => {
       const unsubscribe = this.onMessage((m) => {
         if (m.type === "READY") {
           unsubscribe();
           resolve();
+        } else if (m.type === "INIT_FAILED") {
+          unsubscribe();
+          reject(new Error(m.error));
         }
       });
     });
@@ -332,17 +342,43 @@ export class MainThreadHost implements RenderHost {
     });
   }
 
+  /**
+   * Sums every registered view's SceneModule.getStats() (optional, additive
+   * — see types.ts). Only splat-lounge implements it today, surfacing its
+   * SplatMesh's real splat count/sortMs instead of the hardcoded 0/0 this
+   * replaces (see the gap documented in components/deep-wave/SectionSplats.tsx).
+   */
+  private collectSceneStats(): { splats: number; sortMs: number } {
+    let splats = 0;
+    let sortMs = 0;
+    for (const module of this.moduleByView.values()) {
+      const s = module.getStats?.();
+      if (!s) continue;
+      splats += s.splats ?? 0;
+      sortMs = Math.max(sortMs, s.sortMs ?? 0);
+    }
+    return { splats, sortMs };
+  }
+
   private postStats(now: number, renderMs: number): void {
     this.statsAccumMs += renderMs;
     this.statsAccumFrames += 1;
     if (now - this.lastStatsPostTime < STATS_INTERVAL_MS) return;
 
+    // this.renderer.info is real THREE.WebGLRenderer draw-call bookkeeping
+    // (optional on RendererLike — absent on plain test mocks). gl/renderer.ts
+    // sets `autoReset = false` and gl/stage.ts's render() resets it once per
+    // Stage.render(), so by the time we read it here it holds the total
+    // calls across every view drawn this frame (previously hardcoded to 0).
+    const drawCalls = this.renderer?.info?.render.calls ?? 0;
+    const { splats, sortMs } = this.collectSceneStats();
+
     this.emit({
       type: "STATS",
       ms: this.statsAccumFrames > 0 ? this.statsAccumMs / this.statsAccumFrames : 0,
-      drawCalls: 0,
-      splats: 0,
-      sortMs: 0,
+      drawCalls,
+      splats,
+      sortMs,
     });
     this.statsAccumMs = 0;
     this.statsAccumFrames = 0;

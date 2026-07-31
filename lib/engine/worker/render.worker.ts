@@ -127,7 +127,25 @@ function handleInit(canvas: OffscreenCanvas, dpr: number, initialQuality: Qualit
   reducedMotion = initialReducedMotion;
   size = { width: canvas.width, height: canvas.height, dpr };
 
-  renderer = createRenderer({ canvas });
+  // BUG B1 fix: renderer construction (real WebGL2 context creation) can
+  // throw synchronously — e.g. headless/SwiftShader environments without
+  // WebGL2 support. This runs inside a plain `ctx.onmessage` handler, not
+  // inside the promise chain WorkerHost.init() awaits, so an uncaught throw
+  // here previously vanished into the worker's own error event: no READY,
+  // no failure message, nothing — WorkerHost's `ready` promise (awaiting a
+  // "READY" message) hung forever, leaving EngineProvider stuck at status
+  // "loading" 0% with the LoadingScreen covering the page permanently. Catch
+  // it and post the additive INIT_FAILED message instead so WorkerHost.init()
+  // rejects and EngineProvider falls back to status "fallback" (see
+  // types.ts's InitFailedMessage and host.ts's WorkerHost.init()).
+  try {
+    renderer = createRenderer({ canvas });
+  } catch (err) {
+    console.error("[deep-wave worker] renderer construction failed — falling back to GL-less mode", err);
+    ctx.postMessage({ type: "INIT_FAILED", error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+
   assets = new AssetManager();
   assets.onProgress((p, id) => {
     ctx.postMessage({ type: "ASSET_PROGRESS", p, id });
@@ -262,17 +280,45 @@ function applyFrameState(buf: Float32Array): void {
   stage?.setFrame(currentFrameInput(scroll, pointer));
 }
 
+/**
+ * Sums every registered view's SceneModule.getStats() (optional, additive —
+ * see types.ts). Only splat-lounge implements it today, surfacing its
+ * SplatMesh's real splat count/sortMs instead of the hardcoded 0/0 this
+ * function replaces (see the gap documented in
+ * components/deep-wave/SectionSplats.tsx).
+ */
+function collectSceneStats(): { splats: number; sortMs: number } {
+  let splats = 0;
+  let sortMs = 0;
+  for (const module of moduleByView.values()) {
+    const s = module.getStats?.();
+    if (!s) continue;
+    splats += s.splats ?? 0;
+    sortMs = Math.max(sortMs, s.sortMs ?? 0);
+  }
+  return { splats, sortMs };
+}
+
 function postStats(time: number, renderMs: number): void {
   statsAccumMs += renderMs;
   statsAccumFrames += 1;
   if (time - lastStatsPostTime < STATS_INTERVAL_MS) return;
 
+  // renderer.info is real THREE.WebGLRenderer draw-call bookkeeping —
+  // gl/renderer.ts's createRenderer() sets `autoReset = false` and
+  // gl/stage.ts's render() calls `info.reset()` once per Stage.render(), so
+  // by the time we read it here it holds the total calls across every view
+  // drawn this frame (previously this posted a hardcoded 0, so the ?debug
+  // HUD's "draw calls" row could never show real activity).
+  const drawCalls = renderer?.info?.render.calls ?? 0;
+  const { splats, sortMs } = collectSceneStats();
+
   ctx.postMessage({
     type: "STATS",
     ms: statsAccumFrames > 0 ? statsAccumMs / statsAccumFrames : 0,
-    drawCalls: 0,
-    splats: 0,
-    sortMs: 0,
+    drawCalls,
+    splats,
+    sortMs,
   });
   statsAccumMs = 0;
   statsAccumFrames = 0;

@@ -76,6 +76,18 @@ class SplatLoungeScene implements SceneModule {
     this.splat.update(ctx.camera);
   }
 
+  /**
+   * Surfaces SplatMesh's real splat count/sortMs for the `?debug` HUD's
+   * STATS channel (design doc §6) — both RenderHost implementations
+   * (worker/render.worker.ts, worker/host.ts's MainThreadHost) sum every
+   * view's getStats() instead of hardcoding `splats`/`sortMs` to 0 (the gap
+   * documented in components/deep-wave/SectionSplats.tsx).
+   */
+  getStats(): { splats: number; sortMs: number } {
+    if (!this.splat) return { splats: 0, sortMs: 0 };
+    return { splats: this.splat.stats.count, sortMs: this.splat.stats.sortMs };
+  }
+
   private applyCamera(camera: THREE.PerspectiveCamera): void {
     const { angle, height, distance } = this.orbit;
     camera.position.set(Math.sin(angle) * distance, height, Math.cos(angle) * distance);

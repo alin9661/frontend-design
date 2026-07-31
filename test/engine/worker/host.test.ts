@@ -10,16 +10,21 @@
 //    placeholder scene module mocked so init/update/dispose calls are
 //    directly observable.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RectData, RendererLike } from "@/lib/engine/types";
 import { packFrameState, SCALAR_SLOT_COUNT, type FrameStateView } from "@/lib/engine/worker/protocol";
 
-const { sceneInit, sceneUpdate, sceneDispose, sceneResize, sceneOnProgress } = vi.hoisted(() => ({
+const { sceneInit, sceneUpdate, sceneDispose, sceneResize, sceneOnProgress, sceneGetStats } = vi.hoisted(() => ({
   sceneInit: vi.fn(),
   sceneUpdate: vi.fn(),
   sceneDispose: vi.fn(),
   sceneResize: vi.fn(),
   sceneOnProgress: vi.fn(),
+  // Returns `undefined` by default (SceneModule.getStats is optional) —
+  // individual tests configure a return value via
+  // `sceneGetStats.mockReturnValue(...)` to exercise the STATS-summation
+  // path (see the "BUG B3 stats regression" test below).
+  sceneGetStats: vi.fn((): { splats?: number; sortMs?: number } | undefined => undefined),
 }));
 
 // scene-registry.ts's "placeholder" loader does
@@ -34,6 +39,7 @@ vi.mock("@/lib/scenes/placeholder/scene", () => ({
     dispose: sceneDispose,
     resize: sceneResize,
     onProgress: sceneOnProgress,
+    getStats: sceneGetStats,
   }),
 }));
 
@@ -81,6 +87,72 @@ describe("WorkerHost", () => {
     const host = new WorkerHost();
     expect(host.mode).toBe("worker");
   });
+
+  describe("init() — BUG B1 regression: renderer-creation failure inside the worker", () => {
+    class FakeWorker {
+      static instances: FakeWorker[] = [];
+      listeners = new Set<(ev: MessageEvent) => void>();
+      posted: unknown[] = [];
+      constructor() {
+        FakeWorker.instances.push(this);
+      }
+      addEventListener(type: string, cb: (ev: MessageEvent) => void) {
+        if (type === "message") this.listeners.add(cb);
+      }
+      removeEventListener(type: string, cb: (ev: MessageEvent) => void) {
+        if (type === "message") this.listeners.delete(cb);
+      }
+      postMessage(msg: unknown) {
+        this.posted.push(msg);
+      }
+      terminate() {}
+      /** Simulates render.worker.ts posting a WorkerToMain message back. */
+      emit(data: unknown) {
+        for (const cb of this.listeners) cb({ data } as MessageEvent);
+      }
+    }
+
+    function fakeCanvas(): HTMLCanvasElement {
+      const canvas = document.createElement("canvas");
+      (canvas as unknown as { transferControlToOffscreen: () => unknown }).transferControlToOffscreen = () => ({});
+      return canvas;
+    }
+
+    beforeEach(() => {
+      FakeWorker.instances = [];
+      vi.stubGlobal("Worker", FakeWorker);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("rejects instead of hanging forever when the worker posts INIT_FAILED (no READY ever arrives)", async () => {
+      // On the old code, WorkerHost.init()'s `ready` promise only ever
+      // resolved on a "READY" message — a worker that never posts one (the
+      // pre-fix render.worker.ts on a renderer-construction throw) left this
+      // promise pending forever, and EngineProvider's status stayed
+      // "loading" 0% permanently. This assertion fails (times out) on the
+      // pre-fix host.ts.
+      const host = new WorkerHost();
+      const initPromise = host.init(fakeCanvas(), { dpr: 1, quality: "high", reducedMotion: false });
+
+      const worker = FakeWorker.instances.at(-1)!;
+      worker.emit({ type: "INIT_FAILED", error: "WebGL2 context creation failed" });
+
+      await expect(initPromise).rejects.toThrow("WebGL2 context creation failed");
+    });
+
+    it("still resolves normally on a real READY message (INIT_FAILED handling doesn't regress the happy path)", async () => {
+      const host = new WorkerHost();
+      const initPromise = host.init(fakeCanvas(), { dpr: 1, quality: "high", reducedMotion: false });
+
+      const worker = FakeWorker.instances.at(-1)!;
+      worker.emit({ type: "READY" });
+
+      await expect(initPromise).resolves.toBeUndefined();
+    });
+  });
 });
 
 describe("MainThreadHost — end to end against a RendererLike mock", () => {
@@ -90,6 +162,7 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
     sceneDispose.mockClear();
     sceneResize.mockClear();
     sceneOnProgress.mockClear();
+    sceneGetStats.mockReset().mockReturnValue(undefined);
   });
 
   it("init -> addView(placeholder) -> frame -> resize -> destroy drives the real scene lifecycle", async () => {
@@ -193,6 +266,37 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
     expect(onMessage).toHaveBeenCalledWith({ type: "READY" });
     expect(onMessage).toHaveBeenCalledWith({ type: "ASSET_PROGRESS", p: 1, id: "" });
     expect(onMessage).toHaveBeenCalledWith({ type: "ASSETS_DONE" });
+
+    host.destroy();
+  });
+
+  it("BUG B3 stats regression: reports real draw calls (renderer.info) and summed SceneModule.getStats() instead of hardcoded 0s", async () => {
+    // On the old code, STATS always posted `drawCalls: 0, splats: 0, sortMs:
+    // 0` no matter what actually rendered — the ?debug HUD could never show
+    // real activity even once rendering itself worked. This assertion fails
+    // on the pre-fix code (which ignores renderer.info and moduleByView
+    // entirely).
+    const rendererMock: RendererLike = {
+      ...makeRendererMock(),
+      info: { autoReset: true, reset: () => {}, render: { calls: 7 } },
+    };
+    sceneGetStats.mockReturnValue({ splats: 12345, sortMs: 2.5 });
+
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.addView(0, "placeholder", PLACEHOLDER_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+    host.resize(800, 600, 1);
+
+    host.frame(makeFrameState([{ viewId: 0, ...PLACEHOLDER_RECT, progress: 0.5 }]));
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "STATS", drawCalls: 7, splats: 12345, sortMs: 2.5 })
+    );
 
     host.destroy();
   });

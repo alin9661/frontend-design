@@ -26,7 +26,17 @@
 
 import * as THREE from "three";
 import type { SplatData } from "../../types";
-import { sortIndices } from "./sort.worker";
+// BUG B2 fix: import the pure sort function from sort-core.ts, NOT from
+// sort.worker.ts. sort.worker.ts installs a worker-bootstrap side effect
+// (`self.onmessage = ...`) at module scope, guarded only by `typeof
+// WorkerGlobalScope !== "undefined"` — true not just in its own dedicated
+// worker, but ALSO inside worker/render.worker.ts's OffscreenCanvas worker,
+// which lazy-loads this module (via splat-lounge/scene.ts) as part of its
+// own bundle. Importing sort.worker.ts here used to silently overwrite
+// render.worker.ts's own `onmessage`, breaking the whole render loop and
+// flooding the console with "SORT received before INIT" on every
+// subsequent FRAME_STATE (see sort.worker.ts's header for the full story).
+import { sortIndices } from "./sort-core";
 
 // ---------------------------------------------------------------------------
 // Pure covariance math (mirrors the vertex shader's `quatToMat3`/covariance/

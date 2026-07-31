@@ -18,8 +18,13 @@ export default function SectionParticles() {
       ref={viewRef}
       id="energy"
       aria-labelledby="deep-wave-particles-heading"
-      className="relative min-h-svh bg-cream px-6 py-32 text-forest"
+      className="relative min-h-svh px-6 py-32 text-forest"
     >
+      {/* Background lives in its own negative-z layer so the shared GL
+          canvas (fixed z-0, rendered before every section) shows through
+          instead of being occluded by this section's own background — see
+          SectionHero.tsx's comment for the full stacking-order rationale. */}
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-cream" />
       {/* The gpgpu ping-pong particle field renders behind this copy via
           EngineProvider's shared canvas once the real "particles" scene
           lands in M2, ramping forest → lemon with scroll progress. */}

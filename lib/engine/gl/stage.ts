@@ -115,6 +115,14 @@ export class Stage {
 
     this.renderer.setScissorTest(true);
 
+    // Real THREE.WebGLRenderer draw-call bookkeeping (gl/renderer.ts disables
+    // `info.autoReset` for exactly this reason — see its header comment):
+    // reset once here, before any view renders, so the accumulated count
+    // after the loop below reflects every view drawn this frame, not just
+    // the last one. `info` is optional on RendererLike (absent on plain test
+    // mocks), so this is a no-op there.
+    this.renderer.info?.reset();
+
     for (const managed of this.views.values()) {
       const { view } = managed;
       if (!managed.ready) continue; // not yet initialized — nothing to draw

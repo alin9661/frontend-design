@@ -18,8 +18,13 @@ export default function SectionPointer() {
       ref={viewRef}
       id="attention"
       aria-labelledby="deep-wave-pointer-heading"
-      className="relative min-h-svh bg-forest px-6 py-32 text-cream"
+      className="relative min-h-svh px-6 py-32 text-cream"
     >
+      {/* Background lives in its own negative-z layer so the shared GL
+          canvas (fixed z-0, rendered before every section) shows through
+          instead of being occluded by this section's own background — see
+          SectionHero.tsx's comment for the full stacking-order rationale. */}
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-forest" />
       {/* The instanced leaf/berry field renders behind this copy via
           EngineProvider's shared canvas (lib/scenes/pointer-field/scene.ts);
           onPointer(hit) drives its click/impulse burst (touch = move

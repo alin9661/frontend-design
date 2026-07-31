@@ -27,8 +27,13 @@ export default function SectionSplats() {
       ref={viewRef}
       id="lounge"
       aria-labelledby="deep-wave-splats-heading"
-      className="relative min-h-svh bg-cream px-6 py-32 text-forest"
+      className="relative min-h-svh px-6 py-32 text-forest"
     >
+      {/* Background lives in its own negative-z layer so the shared GL
+          canvas (fixed z-0, rendered before every section) shows through
+          instead of being occluded by this section's own background — see
+          SectionHero.tsx's comment for the full stacking-order rationale. */}
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-cream" />
       {/* SplatMesh renders behind this copy via EngineProvider's shared
           canvas; scroll orbits the camera around the synthesized can +
           table + ambient-puff splat set (lib/scenes/splat-lounge/scene.ts).

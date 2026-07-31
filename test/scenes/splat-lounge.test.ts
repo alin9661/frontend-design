@@ -133,4 +133,28 @@ describe("splat-lounge SceneModule", () => {
     const scene = createSplatLoungeScene();
     expect(() => scene.dispose()).not.toThrow();
   });
+
+  it("BUG B3 stats regression: getStats() surfaces the real SplatMesh count/sortMs instead of the HUD's hardcoded 0/0", () => {
+    // Before this method existed, worker/render.worker.ts and
+    // worker/host.ts's MainThreadHost had no way to read a scene's splat
+    // count at all and hardcoded `splats: 0, sortMs: 0` in every STATS
+    // message — see the gap documented in
+    // components/deep-wave/SectionSplats.tsx.
+    const scene = createSplatLoungeScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const stats = scene.getStats?.();
+    expect(stats).toBeTruthy();
+    expect(stats!.splats).toBeGreaterThanOrEqual(80000);
+    expect(stats!.splats).toBeLessThanOrEqual(150000);
+    expect(stats!.sortMs).toBeGreaterThanOrEqual(0);
+
+    scene.dispose();
+  });
+
+  it("getStats() before init reports zero splats instead of throwing", () => {
+    const scene = createSplatLoungeScene();
+    expect(scene.getStats?.()).toEqual({ splats: 0, sortMs: 0 });
+  });
 });

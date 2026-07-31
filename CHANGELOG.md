@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.2.0.0] - 2026-07-31
+
+### Added
+- Deep Wave (`/deep-wave`): a second playground experiment — an oryzo.ai-style
+  satirical product page for the Mateína can, driven by a new internal
+  creative-WebGL engine. Scroll feels damped and cinematic while keyboard,
+  anchors, and screen readers keep native behavior.
+- Internal engine library (`lib/engine`): hybrid virtual scroll, DOM↔GL rect
+  sync, a single scissor-culled canvas hosting six independent scenes,
+  bloom/SMAA post-processing, GPGPU helpers, and a pure keyframe timeline.
+- Rendering moves off the main thread when the browser allows it
+  (OffscreenCanvas worker) with an identical main-thread fallback — and a
+  readable no-WebGL fallback page when a GPU context can't be created.
+- Custom Gaussian-splat renderer: `.splat`/`.ply` parsers, a procedural splat
+  synthesizer (the demo's ~130k-splat can-on-table scene ships as code, not
+  assets), a dedicated depth-sort worker, and covariance-projected rendering.
+- WebGL typography via a runtime-generated SDF atlas — crisp GL headlines
+  with glow, no font tooling required at build time.
+- Six interactive scenes: composed hero can, timeline-scrubbed exploded view,
+  curl-noise GPU particles, a spring-physics pointer field, the splat lounge,
+  and a keyboard-operable flavor-can carousel.
+- 529 new tests and CI bundle-size assertions guarding the landing page's
+  unchanged footprint.
+
+### Fixed
+- Engine scroll writes no longer cancel native smooth scrolling (keyboard
+  paging, `scrollBy`, anchor jumps now complete while wheel damping is
+  active).
+
 ## [0.1.0.0] - 2026-07-30
 
 ### Added

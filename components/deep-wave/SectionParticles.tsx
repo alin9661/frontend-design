@@ -2,8 +2,8 @@
 //
 // Section 3/6 (design doc §5): curl-noise energy/steam particles, scroll-
 // driven forest→lemon color ramp, MSDF section title. DOM/copy is the M0
-// shell, untouched. M1 wires `useView` (real "particles" scene lands in M2;
-// uses the M1 checkpoint "placeholder" scene for now).
+// shell, untouched. Wires `useView("particles")` — see
+// lib/scenes/particles/scene.ts for the actual gpgpu/curl-noise field.
 
 "use client";
 
@@ -11,7 +11,7 @@ import { useView } from "@/lib/engine/react/useView";
 import GagStats from "./GagStats";
 
 export default function SectionParticles() {
-  const viewRef = useView("placeholder");
+  const viewRef = useView("particles");
 
   return (
     <section

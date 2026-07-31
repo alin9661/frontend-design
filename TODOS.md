@@ -21,6 +21,16 @@ Per-frame object churn in Stage/render.worker/host/EngineProvider tick
 (ViewContext, frame-state, pointer/scroll snapshots). Contained wins exist
 but touch both RenderHost implementations at once.
 
+### Upward hash-anchor from document end
+**Priority:** P3
+Repro: scroll pinned to the exact document bottom (scrollY == limit), then
+`location.hash = '#hero'` — the upward smooth animation is interrupted near
+its start and the page stays at the bottom. Downward anchors, `scrollBy`,
+keyboard scrolling, and wheel all work after the idle-write fix. Suspects:
+Next.js hashchange scroll handling racing the engine's divergence adoption,
+or a Chromium quirk animating from exactly document-end. No UI anchor links
+exist today, so user impact is nil.
+
 ### Reduced-motion live toggle
 **Priority:** P3
 prefers-reduced-motion changes mid-session are only picked up on reload;

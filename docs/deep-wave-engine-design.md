@@ -179,6 +179,7 @@ export interface SceneModule {
   invoke?(method: string, args: unknown[]): void; // cross-thread scene RPC (picker select etc.)
   resize?(w: number, h: number): void;
   dispose(): void;                                // MUST free geometries/materials/targets
+  getStats?(): { splats?: number; sortMs?: number } | void; // (additive, post-M0) — ?debug HUD STATS
 }
 export interface ViewContext {
   scene: THREE.Scene; camera: THREE.PerspectiveCamera;
@@ -187,6 +188,7 @@ export interface ViewContext {
   size: { width: number; height: number; dpr: number };
   quality: QualityTier; // "high" | "medium" | "low"
   reducedMotion: boolean;
+  registerInteractive?(objects: THREE.Object3D[]): void; // (additive, post-M0) — raycast target opt-in
 }
 export class Stage {
   addView(viewId: number, rect: RectData, module: SceneModule, opts?: { post?: boolean }): void;
@@ -195,6 +197,23 @@ export class Stage {
   render(): void;
 }
 ```
+Three post-freeze additive contracts (all optional, so every pre-existing
+hand-built `ViewContext`/`SceneModule` test fixture stays valid unchanged):
+- **`ViewContext.registerInteractive`** (additive, post-M0) — a view opts its
+  raycastable objects in; `Stage.raycastCandidates()` feeds the registered
+  set into gl/raycast.ts's shared `runViewRaycasts()` once per frame. A view
+  that never calls this is skipped entirely (no raycast work, no HIT
+  messages). Each call REPLACES the full set (not additive) so a re-runnable
+  `init()` never accumulates stale references from a previous instance.
+- **`SceneModule.getStats`** (additive, post-M0) — scene-reported stats for
+  the `?debug` HUD's STATS channel (§6); only splat-lounge implements it
+  today. Both RenderHost implementations sum this across every registered
+  view instead of hardcoding `splats`/`sortMs` to 0.
+- **`InitFailedMessage`** (additive, post-M0; worker→main, §4A) — posted by
+  render.worker.ts's INIT handler when constructing the renderer/Stage
+  throws (e.g. WebGL2 context creation fails), so `WorkerHost.init()`'s
+  `ready` promise rejects instead of hanging forever awaiting a READY that
+  will never arrive.
 - **assets.ts** — weighted named jobs feeding loading progress:
 ```ts
 export class AssetManager {
@@ -220,14 +239,26 @@ export class AssetManager {
 - **protocol.ts** — typed discriminated-union messages + pure pack/unpack:
   main→worker `INIT{canvas: OffscreenCanvas, dpr, quality, reducedMotion}`,
   `FRAME_STATE(Float32Array transferable)` [scrollCurrent, scrollVelocity,
-  scrollProgress, pointerX, pointerY, pointerVX, pointerVY, then per-view:
+  scrollProgress, pointerX, pointerY, pointerVX, pointerVY, pointerFlags
+  (bit0=down, bit1=inside — additive, post-M0: see below), then per-view:
   viewId, top, left, width, height, progress], `RESIZE{w,h,dpr}`,
   `VIEW_ADD{viewId, sceneId, rect}`, `VIEW_REMOVE{viewId}`,
   `SCENE_INVOKE{viewId, method, args}`, `SET_REDUCED_MOTION{on}`, `DISPOSE`;
   worker→main `READY`, `ASSET_PROGRESS{p, id}`, `ASSETS_DONE`,
   `HIT{viewId, hit|null}`, `STATS{ms, drawCalls, splats, sortMs}`,
-  `CONTEXT_LOST`, `CONTEXT_RESTORED`. Pack/unpack functions are pure and
-  unit-tested round-trip.
+  `CONTEXT_LOST`, `CONTEXT_RESTORED`, `INIT_FAILED{error}` (additive,
+  post-M0 — see below). Pack/unpack functions are pure and unit-tested
+  round-trip.
+  **`pointerFlags` (additive, post-M0):** both RenderHost implementations
+  originally hardcoded `down: false, inside: true` on the receiving end
+  instead of threading the real `PointerTracker` state through FRAME_STATE,
+  which made pointer interactivity unreachable end-to-end (no real
+  down-edge could ever reach a scene's `onPointer`, and a pointer that had
+  actually left the viewport still read as "inside"). Packing both booleans
+  into one bit-packed scalar (slot 7) rather than two more float slots keeps
+  the transferable buffer small while fitting cleanly into the existing
+  scalar-slot layout — see worker/protocol.ts's header comment for the exact
+  bit layout.
 - **scene-registry.ts** — sceneId → `() => Promise<SceneModule>` map (both
   sides import the same registry; functions can't cross postMessage). Scene
   ids: `"hero-can" | "exploded" | "particles" | "pointer-field" |

@@ -2,6 +2,14 @@
 
 ## Deep Wave (WebGL engine + /deep-wave route)
 
+### Picker hover selection
+**Priority:** P3
+`lib/scenes/picker/scene.ts` no longer registers its can groups as raycast
+targets (design review item D — registering cost a real per-frame raycast
+for zero payoff while selection flows entirely through DOM buttons +
+`invoke("select", [i])`). Wire `onPointer` + re-register the flavor cans as
+raycast targets when hover/click-driven selection is actually implemented.
+
 ### Entrance choreography
 **Priority:** P2
 Loader-gated entrance reveals and scroll-linked per-section GL alpha fades

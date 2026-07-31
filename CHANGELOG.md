@@ -24,7 +24,7 @@ Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 - Six interactive scenes: composed hero can, timeline-scrubbed exploded view,
   curl-noise GPU particles, a spring-physics pointer field, the splat lounge,
   and a keyboard-operable flavor-can carousel.
-- 529 new tests and CI bundle-size assertions guarding the landing page's
+- 594 new tests and CI bundle-size assertions guarding the landing page's
   unchanged footprint.
 
 ### Fixed

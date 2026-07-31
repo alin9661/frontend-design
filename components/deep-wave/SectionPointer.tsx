@@ -2,8 +2,8 @@
 //
 // Section 4/6 (design doc §5): ~300 InstancedMesh leaves/berries with spring
 // integrators reacting to pointer velocity + click impulse. DOM/copy is the
-// M0 shell, untouched. M1 wires `useView` (real "pointer-field" scene lands
-// in M2; uses the M1 checkpoint "placeholder" scene for now).
+// M0 shell, untouched. Wires `useView("pointer-field")` — see
+// lib/scenes/pointer-field/scene.ts for the actual GL scene (M2).
 
 "use client";
 
@@ -11,7 +11,7 @@ import { useView } from "@/lib/engine/react/useView";
 import GagStats from "./GagStats";
 
 export default function SectionPointer() {
-  const viewRef = useView("placeholder");
+  const viewRef = useView("pointer-field");
 
   return (
     <section
@@ -21,9 +21,10 @@ export default function SectionPointer() {
       className="relative min-h-svh bg-forest px-6 py-32 text-cream"
     >
       {/* The instanced leaf/berry field renders behind this copy via
-          EngineProvider's shared canvas once the real "pointer-field" scene
-          lands in M2; onPointer(hit) will drive its raycast click impulse
-          (touch = move impulses, no hover). */}
+          EngineProvider's shared canvas (lib/scenes/pointer-field/scene.ts);
+          onPointer(hit) drives its click/impulse burst (touch = move
+          impulses, since a PointerHit doesn't distinguish hover from
+          click/tap). */}
       <div className="mx-auto max-w-3xl">
         <h2
           id="deep-wave-pointer-heading"

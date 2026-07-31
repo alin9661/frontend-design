@@ -7,8 +7,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
-import { ViewRaycaster, pointerUniformValues } from "@/lib/engine/gl/raycast";
-import type { PointerState } from "@/lib/engine/types";
+import { ViewRaycaster, pointerUniformValues, runViewRaycasts, type RaycastCandidate } from "@/lib/engine/gl/raycast";
+import type { PointerHit, PointerState, RectData, SceneModule } from "@/lib/engine/types";
 
 function makeCameraAndTarget() {
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
@@ -81,6 +81,135 @@ describe("ViewRaycaster", () => {
     raycaster.update({ ndcX: 0, ndcY: 0, camera, targets: [mesh], now: 16, down: true }, onPointer); // down edge
 
     expect(onPointer).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("runViewRaycasts", () => {
+  const RECT: RectData = { top: 0, left: 0, width: 800, height: 600 };
+  const SIZE = { width: 800, height: 600 };
+
+  function makeCandidate(viewId: number, module: SceneModule): { candidate: RaycastCandidate; mesh: THREE.Mesh } {
+    const { camera, mesh } = makeCameraAndTarget();
+    return { candidate: { viewId, rect: RECT, camera, targets: [mesh], module }, mesh };
+  }
+
+  function fakeModule(onPointer?: (hit: PointerHit | null) => void): SceneModule {
+    return { init: () => {}, update: () => {}, dispose: () => {}, onPointer };
+  }
+
+  it("posts HIT (via onHit) and calls SceneModule.onPointer on enter, but not on every subsequent frame while still hovering", () => {
+    const onPointer = vi.fn();
+    const onHit = vi.fn();
+    const { candidate } = makeCandidate(1, fakeModule(onPointer));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    // pointer centered (ndc 0,0) -> hits the 10x10 plane dead ahead.
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters, onHit });
+    expect(onPointer).toHaveBeenCalledTimes(1);
+    expect(onPointer.mock.calls[0]![0]).not.toBeNull();
+    expect(onHit).toHaveBeenCalledTimes(1);
+    expect(onHit.mock.calls[0]![0]).toBe(1);
+    expect(onHit.mock.calls[0]![1]).not.toBeNull();
+
+    // Same target, slightly different position, well past any throttle window — still hovering.
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0.01, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 1000, raycasters, onHit });
+    expect(onPointer).toHaveBeenCalledTimes(1); // no re-fire
+    expect(onHit).toHaveBeenCalledTimes(1); // no HIT spam
+  });
+
+  it("posts HIT(null) and calls onPointer(null) on leave", () => {
+    const onPointer = vi.fn();
+    const onHit = vi.fn();
+    const { candidate } = makeCandidate(2, fakeModule(onPointer));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters, onHit });
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 5, y: 5, down: false, inside: true }, scrollY: 0, size: SIZE, now: 1000, raycasters, onHit });
+
+    expect(onPointer).toHaveBeenCalledTimes(2);
+    expect(onPointer.mock.calls[1]![0]).toBeNull();
+    expect(onHit).toHaveBeenLastCalledWith(2, null);
+  });
+
+  it("pointer.inside === false forces a leave even at an NDC that would otherwise hit", () => {
+    const onPointer = vi.fn();
+    const { candidate } = makeCandidate(3, fakeModule(onPointer));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters });
+    expect(onPointer.mock.calls[0]![0]).not.toBeNull();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: false }, scrollY: 0, size: SIZE, now: 1000, raycasters });
+    expect(onPointer).toHaveBeenCalledTimes(2);
+    expect(onPointer.mock.calls[1]![0]).toBeNull();
+  });
+
+  it("skips views with no registered targets (empty candidates list) without throwing", () => {
+    const raycasters = new Map<number, ViewRaycaster>();
+    expect(() =>
+      runViewRaycasts({ candidates: [], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters })
+    ).not.toThrow();
+  });
+
+  it("is a no-op when size is zero (view never resized yet)", () => {
+    const onPointer = vi.fn();
+    const { candidate } = makeCandidate(4, fakeModule(onPointer));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: { width: 0, height: 0 }, now: 0, raycasters });
+    expect(onPointer).not.toHaveBeenCalled();
+  });
+
+  it("prunes ViewRaycaster state for views no longer present in candidates", () => {
+    const { candidate } = makeCandidate(5, fakeModule());
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({ candidates: [candidate], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters });
+    expect(raycasters.has(5)).toBe(true);
+
+    runViewRaycasts({ candidates: [], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 1000, raycasters });
+    expect(raycasters.has(5)).toBe(false);
+  });
+
+  it("each registered view is independent — a hit in view A doesn't affect view B's hover state", () => {
+    const onPointerA = vi.fn();
+    const onPointerB = vi.fn();
+    const { candidate: a } = makeCandidate(10, fakeModule(onPointerA));
+    const { candidate: b } = makeCandidate(11, fakeModule(onPointerB));
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    // Centered pointer hits both (both candidates share the same rect/NDC convention in this test).
+    runViewRaycasts({ candidates: [a, b], pointer: { x: 0, y: 0, down: false, inside: true }, scrollY: 0, size: SIZE, now: 0, raycasters });
+    expect(onPointerA).toHaveBeenCalledTimes(1);
+    expect(onPointerB).toHaveBeenCalledTimes(1);
+    expect(raycasters.size).toBe(2);
+  });
+
+  it("remaps InstancedMesh instanceId through userData.instanceIndexMap into the reported hit (multi-target global index)", () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    camera.position.z = 5;
+    camera.lookAt(0, 0, 0);
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial(), 1);
+    mesh.setMatrixAt(0, new THREE.Matrix4());
+    mesh.userData.instanceIndexMap = [777];
+
+    let seenHit: PointerHit | null | undefined;
+    const module = fakeModule((hit) => {
+      seenHit = hit;
+    });
+    const raycasters = new Map<number, ViewRaycaster>();
+
+    runViewRaycasts({
+      candidates: [{ viewId: 6, rect: RECT, camera, targets: [mesh], module }],
+      pointer: { x: 0, y: 0, down: false, inside: true },
+      scrollY: 0,
+      size: SIZE,
+      now: 0,
+      raycasters,
+    });
+
+    expect(seenHit).not.toBeNull();
+    expect(seenHit?.instanceId).toBe(777);
   });
 });
 

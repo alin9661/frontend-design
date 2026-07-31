@@ -325,6 +325,42 @@ describe("pointer-field SceneModule", () => {
     scene.dispose();
   });
 
+  it("init registers both InstancedMesh as interactive, tagged with an instanceIndexMap back to the global sim index", () => {
+    const scene = createPointerFieldScene();
+    const registered: THREE.Object3D[] = [];
+    const ctx = makeCtx({ registerInteractive: (objects) => registered.push(...objects) });
+    scene.init(ctx);
+
+    expect(registered).toHaveLength(2);
+    for (const obj of registered) {
+      expect(obj).toBeInstanceOf(THREE.InstancedMesh);
+      expect(obj.userData.instanceIndexMap).toBeDefined();
+    }
+
+    scene.dispose();
+  });
+
+  it("onPointer with a real hit's instanceId centers the impulse on that exact instance's own position, not the raw hit.point", () => {
+    const scene = createPointerFieldScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const before = snapshotMatrices(ctx);
+    // hit.point is deliberately far outside the field (home grid spans
+    // roughly [-400,400]x[-300,300] for this rect) — if the old
+    // point-based behavior were still in effect, applyRadialImpulse's
+    // 170px radius would find nothing near (9999,9999) and NOTHING would
+    // move. Only the instanceId-based path (indexing directly into the
+    // sim's own posX/posY) can produce movement here.
+    scene.onPointer!({ x: 0, y: 0, point: { x: 9999, y: 9999, z: 0 }, distance: 1, instanceId: 42 });
+    scene.update(1 / 60, ctx);
+    const after = snapshotMatrices(ctx);
+
+    expect(anyChanged(before, after)).toBe(true);
+
+    scene.dispose();
+  });
+
   it("onPointer is inert once reducedMotion is set (no queued impulse, no crash)", () => {
     const scene = createPointerFieldScene();
     const ctx = makeCtx({ reducedMotion: true });

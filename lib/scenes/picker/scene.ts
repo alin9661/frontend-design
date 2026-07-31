@@ -155,6 +155,15 @@ class PickerScene implements SceneModule {
       return { index, group: built.group };
     });
 
+    // Registers each flavor's can group as a raycast target (design doc §4A
+    // raycast gap) — wires HIT{viewId, hit|null} for main-side consumers
+    // (see gl/raycast.ts's shared runViewRaycasts()); this scene doesn't
+    // implement onPointer itself today (selection flows through the real
+    // DOM buttons + invoke("select", [i]) per design doc §5 row 6), but
+    // registering costs nothing extra and leaves hover/click-driven
+    // selection wireable later without touching worker/host.ts again.
+    ctx.registerInteractive?.(this.cans.map((can) => can.group));
+
     this.applyFrame(ctx);
 
     return loadFont(ctx.assets)

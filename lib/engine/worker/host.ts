@@ -10,9 +10,15 @@
 // touches (`Stage`, `AssetManager`, `RendererLike`) is designed to run
 // against a `RendererLike` mock (see types.ts) instead of a live
 // `THREE.WebGLRenderer`.
+//
+// Pointer raycasting: `frame()` calls gl/raycast.ts's shared
+// `runViewRaycasts()` — the SAME function render.worker.ts's RAF tick calls
+// — so MainThreadHost drives an identical SceneModule.onPointer sequence
+// (and HIT emission) to the worker path instead of a hand-maintained copy.
 
 import { AssetManager } from "../gl/assets";
 import { ContextLossHandler, type ContextLossTarget } from "../gl/context-loss";
+import { runViewRaycasts, ViewRaycaster } from "../gl/raycast";
 import { clampDpr, createRenderer, detectQualityTier, setSize } from "../gl/renderer";
 import { Stage, type StageFrameInput } from "../gl/stage";
 import type {
@@ -176,6 +182,10 @@ export class MainThreadHost implements RenderHost {
   /** Stage exposes no per-view module getter (needed for `invoke()`), so
    * MainThreadHost keeps its own viewId -> SceneModule map alongside it. */
   private readonly moduleByView = new Map<number, SceneModule>();
+  /** Per-view raycaster state (hover-transition tracking), fed to
+   * gl/raycast.ts's shared `runViewRaycasts()` each `frame()` call — see
+   * render.worker.ts's identical `raycasters` module state. */
+  private readonly raycasters = new Map<number, ViewRaycaster>();
   private readonly listeners = new Set<(m: WorkerToMain) => void>();
   private unsubscribeAssetProgress: (() => void) | null = null;
 
@@ -296,6 +306,19 @@ export class MainThreadHost implements RenderHost {
     this.stage.render();
     const renderMs = (typeof performance !== "undefined" ? performance.now() : Date.now()) - renderStart;
     this.postStats(now, renderMs);
+
+    // Same shared path render.worker.ts's RAF tick calls (see this file's
+    // header comment) — candidates are only the views a scene actually
+    // registered interactive objects for (Stage.raycastCandidates()).
+    runViewRaycasts({
+      candidates: this.stage.raycastCandidates(),
+      pointer,
+      scrollY: scroll.current,
+      size: this.size,
+      now,
+      raycasters: this.raycasters,
+      onHit: (viewId, hit) => this.emit({ type: "HIT", viewId, hit }),
+    });
   }
 
   resize(w: number, h: number, dpr: number): void {
@@ -314,6 +337,7 @@ export class MainThreadHost implements RenderHost {
     this.stage?.dispose();
     this.stage = null;
     this.moduleByView.clear();
+    this.raycasters.clear();
     this.renderer?.dispose();
     this.renderer = null;
     this.assets = null;

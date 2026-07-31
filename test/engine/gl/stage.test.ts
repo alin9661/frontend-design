@@ -247,6 +247,77 @@ describe("Stage.dispose — bookkeeping", () => {
   });
 });
 
+describe("Stage.raycastCandidates — registerInteractive wiring", () => {
+  it("returns no candidates for a view that never calls registerInteractive", async () => {
+    const stage = new Stage(mockRenderer(), baseFrame());
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, trackedScene());
+    await flush();
+
+    expect(stage.raycastCandidates()).toEqual([]);
+  });
+
+  it("returns a candidate for a view that registers interactive objects via its ViewContext, in view", async () => {
+    const stage = new Stage(mockRenderer(), baseFrame());
+    let registered: unknown[] = [];
+    const scene: SceneModule = {
+      init: (ctx) => {
+        registered = [{}, {}];
+        ctx.registerInteractive?.(registered as never);
+      },
+      update: () => {},
+      dispose: () => {},
+    };
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, scene);
+    await flush();
+
+    const candidates = stage.raycastCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.viewId).toBe(1);
+    expect(candidates[0]!.targets).toEqual(registered);
+    expect(candidates[0]!.module).toBe(scene);
+  });
+
+  it("excludes a registered view that is currently off-screen", async () => {
+    const stage = new Stage(mockRenderer(), baseFrame({ size: { width: 800, height: 800, dpr: 1 } }));
+    const scene: SceneModule = {
+      init: (ctx) => ctx.registerInteractive?.([{} as never]),
+      update: () => {},
+      dispose: () => {},
+    };
+    stage.addView(1, { top: 9000, left: 0, width: 100, height: 100 }, scene); // far off-screen
+    await flush();
+
+    expect(stage.raycastCandidates()).toEqual([]);
+  });
+
+  it("excludes a registered view that hasn't finished init() yet", () => {
+    const stage = new Stage(mockRenderer(), baseFrame());
+    let resolveInit!: () => void;
+    const scene: SceneModule = {
+      init: (ctx) =>
+        new Promise<void>((resolve) => {
+          ctx.registerInteractive?.([{} as never]);
+          resolveInit = resolve;
+        }),
+      update: () => {},
+      dispose: () => {},
+    };
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, scene);
+    // Not awaited — init() hasn't resolved, so `managed.ready` is still false.
+    expect(stage.raycastCandidates()).toEqual([]);
+    resolveInit();
+  });
+});
+
+describe("Stage.currentFrame", () => {
+  it("reflects the frame most recently passed to setFrame()", () => {
+    const stage = new Stage(mockRenderer(), baseFrame());
+    const nextFrame = baseFrame({ pointer: { x: 0.5, y: -0.5, vx: 1, vy: 2, down: true, inside: true } });
+    stage.setFrame(nextFrame);
+    expect(stage.currentFrame).toEqual(nextFrame);
+  });
+});
+
 describe("Stage.reinit — context-loss restore contract", () => {
   it("re-runs init() on every tracked view (re-runnable per SceneModule contract)", async () => {
     const stage = new Stage(mockRenderer(), baseFrame());

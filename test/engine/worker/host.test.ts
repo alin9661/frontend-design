@@ -11,21 +11,27 @@
 //    directly observable.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RectData, RendererLike } from "@/lib/engine/types";
+import * as THREE from "three";
+import type { RectData, RendererLike, ViewContext } from "@/lib/engine/types";
 import { packFrameState, SCALAR_SLOT_COUNT, type FrameStateView } from "@/lib/engine/worker/protocol";
 
-const { sceneInit, sceneUpdate, sceneDispose, sceneResize, sceneOnProgress, sceneGetStats } = vi.hoisted(() => ({
-  sceneInit: vi.fn(),
-  sceneUpdate: vi.fn(),
-  sceneDispose: vi.fn(),
-  sceneResize: vi.fn(),
-  sceneOnProgress: vi.fn(),
-  // Returns `undefined` by default (SceneModule.getStats is optional) —
-  // individual tests configure a return value via
-  // `sceneGetStats.mockReturnValue(...)` to exercise the STATS-summation
-  // path (see the "BUG B3 stats regression" test below).
-  sceneGetStats: vi.fn((): { splats?: number; sortMs?: number } | undefined => undefined),
-}));
+const { sceneInit, sceneUpdate, sceneDispose, sceneResize, sceneOnProgress, sceneGetStats, sceneOnPointer } =
+  vi.hoisted(() => ({
+    sceneInit: vi.fn(),
+    sceneUpdate: vi.fn(),
+    sceneDispose: vi.fn(),
+    sceneResize: vi.fn(),
+    sceneOnProgress: vi.fn(),
+    // Returns `undefined` by default (SceneModule.getStats is optional) —
+    // individual tests configure a return value via
+    // `sceneGetStats.mockReturnValue(...)` to exercise the STATS-summation
+    // path (see the "BUG B3 stats regression" test below).
+    sceneGetStats: vi.fn((): { splats?: number; sortMs?: number } | undefined => undefined),
+    // SceneModule.onPointer is optional too — a spy so the raycast/HIT
+    // wiring tests below can assert it was actually driven, without every
+    // other test in this file needing to care.
+    sceneOnPointer: vi.fn(),
+  }));
 
 // scene-registry.ts's "placeholder" loader does
 // `import("@/lib/scenes/placeholder/scene").then((m) => m.default())` — mock
@@ -40,6 +46,7 @@ vi.mock("@/lib/scenes/placeholder/scene", () => ({
     resize: sceneResize,
     onProgress: sceneOnProgress,
     getStats: sceneGetStats,
+    onPointer: sceneOnPointer,
   }),
 }));
 
@@ -310,6 +317,121 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
     const empty = makeFrameState([]);
     expect(empty.length).toBe(SCALAR_SLOT_COUNT);
     expect(() => host.frame(empty)).not.toThrow();
+
+    host.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MainThreadHost — worker-side raycasting parity (design doc §4A): frame()
+// must drive gl/raycast.ts's shared runViewRaycasts() exactly like
+// render.worker.ts's RAF tick does (see render.worker.test.ts's identical
+// suite) — HIT posted on enter/leave, no HIT spam while hovering the same
+// target, SceneModule.onPointer called locally.
+// ---------------------------------------------------------------------------
+
+describe("MainThreadHost — raycast/HIT wiring (design doc §4A)", () => {
+  const FULL_RECT: RectData = { top: 0, left: 0, width: 800, height: 600 };
+
+  function packFrame(pointerX: number, pointerY: number, viewId: number): Float32Array {
+    return packFrameState(
+      { scrollCurrent: 0, scrollVelocity: 0, scrollProgress: 0, pointerX, pointerY, pointerVX: 0, pointerVY: 0 },
+      [{ viewId, ...FULL_RECT, progress: 0.5 }]
+    );
+  }
+
+  beforeEach(() => {
+    sceneInit.mockReset();
+    sceneUpdate.mockReset();
+    sceneDispose.mockReset();
+    sceneOnPointer.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts HIT and calls SceneModule.onPointer on hover enter, not again while still hovering, then on leave", async () => {
+    // frame()'s raycast path throttles per-view via performance.now() (see
+    // gl/raycast.ts's DEFAULT_RAYCAST_THROTTLE_MS) — three back-to-back
+    // synchronous frame() calls would otherwise land within the same
+    // throttle window and the "leave" case below could never actually
+    // re-cast. `performance.now()` is called twice per frame() (once for
+    // `now`, once again for `renderMs`); space successive `now` values 1s
+    // apart so every call is well past the throttle.
+    const nowSpy = vi.spyOn(performance, "now");
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(1001)
+      .mockReturnValueOnce(2000)
+      .mockReturnValueOnce(2001);
+
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    // A huge plane dead-center so a pointer NDC of (0,0) always hits it,
+    // regardless of the view camera's exact fov math. `camera.updateMatrixWorld()`
+    // is what a real `THREE.WebGLRenderer.render(scene, camera)` call does
+    // automatically for a parent-less camera (View's camera is never added
+    // to its own scene — see gl/view.ts) before any raycast against it would
+    // be meaningful; the mocked `RendererLike.render()` below is a no-op, so
+    // nothing else would ever call it in this test.
+    sceneInit.mockImplementationOnce((ctx: ViewContext) => {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshBasicMaterial());
+      ctx.scene.add(mesh);
+      ctx.registerInteractive?.([mesh]);
+      ctx.camera.updateMatrixWorld();
+    });
+
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1);
+    host.addView(20, "placeholder", FULL_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+
+    // Centered pointer -> enters hover.
+    host.frame(packFrame(0, 0, 20));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(1);
+    expect(sceneOnPointer.mock.calls[0]![0]).not.toBeNull();
+    expect(onMessage).toHaveBeenCalledWith({ type: "HIT", viewId: 20, hit: expect.anything() });
+
+    // Still centered, 1s later (past the throttle window) — still hovering
+    // the same target: no re-fire.
+    onMessage.mockClear();
+    host.frame(packFrame(0, 0, 20));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(1);
+    expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "HIT" }));
+
+    // Pointer far outside any real frustum, another 1s later -> leaves.
+    host.frame(packFrame(50, 50, 20));
+    expect(sceneOnPointer).toHaveBeenCalledTimes(2);
+    expect(sceneOnPointer.mock.calls[1]![0]).toBeNull();
+    expect(onMessage).toHaveBeenCalledWith({ type: "HIT", viewId: 20, hit: null });
+
+    host.destroy();
+  });
+
+  it("never raycasts (no HIT, no onPointer) for a scene that never registers interactive objects", async () => {
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    // sceneInit intentionally does NOT call ctx.registerInteractive.
+    const canvas = document.createElement("canvas");
+    await host.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+    host.resize(800, 600, 1);
+    host.addView(21, "placeholder", FULL_RECT);
+    await vi.waitFor(() => expect(sceneInit).toHaveBeenCalledTimes(1));
+
+    host.frame(packFrame(0, 0, 21));
+
+    expect(sceneOnPointer).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "HIT" }));
 
     host.destroy();
   });

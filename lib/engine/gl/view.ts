@@ -87,6 +87,10 @@ export class View {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   rect: RectData;
+  /** Set via `ViewContext.registerInteractive()` — see gl/raycast.ts's
+   * `Stage.raycastCandidates()` for how this feeds the shared raycast path.
+   * Empty until (and unless) the scene ever registers anything. */
+  interactiveObjects: THREE.Object3D[] = [];
 
   constructor(id: number, rect: RectData, module: SceneModule, opts: ViewOptions = {}) {
     this.id = id;
@@ -101,6 +105,11 @@ export class View {
   updateRect(rect: RectData): void {
     this.rect = rect;
     this.applyCamera();
+  }
+
+  /** `ViewContext.registerInteractive()`'s target — replaces the full set. */
+  setInteractive(objects: THREE.Object3D[]): void {
+    this.interactiveObjects = objects;
   }
 
   inView(scrollY: number, viewportH: number, margin = 0): boolean {

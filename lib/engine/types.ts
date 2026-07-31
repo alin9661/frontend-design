@@ -153,6 +153,19 @@ export interface ViewContext {
   size: { width: number; height: number; dpr: number };
   quality: QualityTier;
   reducedMotion: boolean;
+  /**
+   * Additive (post-M0-freeze): opt-in registration of this view's
+   * raycastable objects (design doc §4A gap — "how do scenes register
+   * interactive objects"). Both RenderHost implementations feed the
+   * registered set into gl/raycast.ts's shared `runViewRaycasts()` helper
+   * once per frame (see gl/stage.ts's `Stage.raycastCandidates()`); a view
+   * that never calls this is skipped entirely — no raycast work, no HIT
+   * messages. Each call REPLACES the full registered set (not additive) so
+   * a scene's re-runnable `init()` (context-loss restore) never accumulates
+   * stale references from a previous instance. Optional so every existing
+   * hand-built `ViewContext` test fixture stays valid unchanged.
+   */
+  registerInteractive?(objects: THREE.Object3D[]): void;
 }
 
 export interface SceneModule {

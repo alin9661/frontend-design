@@ -13,10 +13,19 @@
 // This mirrors worker/host.ts's MainThreadHost pipeline as closely as gl/'s
 // current public API allows — see the TODO/NOTE comment below for the one
 // remaining spot where it can't (Post's composer needs a fixed scene/camera
-// at construction; Stage doesn't yet expose a per-view scene/camera/targets
-// getter for raycasting). That's a cross-workstream contract gap for
-// whoever extends gl/Stage next, not a bug in this file — see the M1
+// at construction; gl/Stage doesn't yet expose a way to swap it to whichever
+// view is currently rendering). That's a cross-workstream contract gap for
+// whoever extends gl/Post/gl/Stage next, not a bug in this file — see the M1
 // "worker" workstream return notes.
+//
+// Worker-side raycasting: per tick, after rendering, `runViewRaycasts()`
+// (gl/raycast.ts) raycasts every registered view's interactive objects
+// against the unpacked FRAME_STATE pointer, calls that view's
+// `SceneModule.onPointer` locally (scenes live worker-side), and posts HIT
+// back to main on every enter/leave/down-edge transition — the SAME
+// function worker/host.ts's MainThreadHost calls from `frame()`, so both
+// RenderHost implementations drive identical onPointer behavior by
+// construction (design doc §4A) instead of two hand-maintained copies.
 //
 // SCENE_INVOKE routing: Stage also has no per-view SceneModule getter, but
 // (like MainThreadHost, see host.ts) this file keeps its own viewId ->
@@ -27,6 +36,7 @@
 
 import { AssetManager } from "../gl/assets";
 import { ContextLossHandler, type ContextLossTarget } from "../gl/context-loss";
+import { runViewRaycasts, ViewRaycaster } from "../gl/raycast";
 import { createRenderer, setSize } from "../gl/renderer";
 import { Stage, type StageFrameInput } from "../gl/stage";
 import type { MainToWorker, QualityTier, RectData, SceneId, SceneModule, WorkerToMain } from "../types";
@@ -60,6 +70,10 @@ let assets: AssetManager | null = null;
 /** Stage exposes no per-view module getter (needed for SCENE_INVOKE
  * routing) — mirrors MainThreadHost's moduleByView map (host.ts). */
 const moduleByView = new Map<number, SceneModule>();
+/** Per-view raycaster state (hover-transition tracking), owned here and fed
+ * to gl/raycast.ts's shared `runViewRaycasts()` each tick — see host.ts's
+ * identical `MainThreadHost.raycasters` field. */
+const raycasters = new Map<number, ViewRaycaster>();
 let contextLoss: ContextLossHandler | null = null;
 let quality: QualityTier = "high";
 let reducedMotion = false;
@@ -207,6 +221,7 @@ function handleDispose(): void {
   stage?.dispose();
   stage = null;
   moduleByView.clear();
+  raycasters.clear();
   renderer?.dispose();
   renderer = null;
   assets = null;
@@ -251,9 +266,19 @@ function tick(time: number): void {
   postStats(time, renderMs);
 
   // Worker-side raycasting (design doc §4A "runs raycasts worker-side,
-  // posts HIT") needs each view's camera + candidate objects, which Stage
-  // doesn't expose per-view yet (same gap noted in host.ts's
-  // MainThreadHost) — no HIT messages are posted until that lands.
+  // posts HIT"): candidates are only the views a scene actually registered
+  // interactive objects for (Stage.raycastCandidates()); onHit forwards
+  // every enter/leave/down-edge transition as a HIT message.
+  const frameSnapshot = stage.currentFrame;
+  runViewRaycasts({
+    candidates: stage.raycastCandidates(),
+    pointer: frameSnapshot.pointer,
+    scrollY: frameSnapshot.scroll.current,
+    size: frameSnapshot.size,
+    now: time,
+    raycasters,
+    onHit: (viewId, hit) => ctx.postMessage({ type: "HIT", viewId, hit }),
+  });
 }
 
 function applyFrameState(buf: Float32Array): void {

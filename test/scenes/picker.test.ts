@@ -307,7 +307,7 @@ function makeFakeAssets(): AssetManager {
   };
 }
 
-function makeViewContext(): ViewContext {
+function makeViewContext(overrides: Partial<ViewContext> = {}): ViewContext {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
   camera.position.z = 500;
@@ -322,6 +322,7 @@ function makeViewContext(): ViewContext {
     size: { width: 500, height: 500, dpr: 1 },
     quality: "high",
     reducedMotion: false,
+    ...overrides,
   };
 }
 
@@ -384,6 +385,19 @@ describe("picker scene.ts — SceneModule contract, end to end", () => {
     for (let i = 0; i < 60; i++) scene.update(1 / 60, ctx);
 
     expect(ringGroup!.rotation.y).not.toBeCloseTo(before, 3);
+
+    scene.dispose();
+  });
+
+  it("init() registers one interactive object per flavor (design doc §4A raycast registration)", async () => {
+    const scene = createPickerScene();
+    const registered: THREE.Object3D[] = [];
+    const ctx = makeViewContext({ registerInteractive: (objects) => registered.push(...objects) });
+
+    await scene.init(ctx);
+
+    expect(registered).toHaveLength(flavors.length);
+    for (const obj of registered) expect(obj).toBeInstanceOf(THREE.Group);
 
     scene.dispose();
   });

@@ -10,6 +10,18 @@
 // reducedMotion swaps the layout to an exact static grid and skips physics
 // entirely (one static frame, per design doc §6 a11y: "static frames").
 //
+// Interactive registration (design doc §4A raycast gap): both leafMesh and
+// berryMesh are registered via `ctx.registerInteractive()` so both
+// RenderHost implementations raycast them each frame (gl/raycast.ts's
+// shared `runViewRaycasts()`). Each mesh's `userData.instanceIndexMap` is
+// set to that mesh's own `leafIndices`/`berryIndices` array, so a real hit's
+// `instanceId` (see gl/raycast.ts's `resolveInstanceId`) already arrives
+// here as the GLOBAL `PointerFieldSim` index regardless of which of the two
+// meshes was actually hit — `onPointer` uses it to center the click impulse
+// on that exact instance's own current position instead of the (less
+// precise, since it's a point on the hit quad's surface rather than the
+// instance's own center) raycast `hit.point`.
+//
 // Default export is a FACTORY (`() => SceneModule`), matching
 // lib/scenes/placeholder/scene.ts's convention — scene-registry.ts calls it
 // once per view so each mounted view gets its own instance/state.
@@ -116,8 +128,15 @@ class PointerFieldScene implements SceneModule {
     this.applyTransforms(this.leafMesh, this.leafIndices);
     this.applyTransforms(this.berryMesh, this.berryIndices);
 
+    // See this class's header comment: lets gl/raycast.ts's toPointerHit
+    // remap each mesh's own local instanceId back to the shared PointerFieldSim
+    // global index space.
+    this.leafMesh.userData.instanceIndexMap = this.leafIndices;
+    this.berryMesh.userData.instanceIndexMap = this.berryIndices;
+
     ctx.scene.add(this.leafMesh);
     ctx.scene.add(this.berryMesh);
+    ctx.registerInteractive?.([this.leafMesh, this.berryMesh]);
   }
 
   update(dt: number, ctx: ViewContext): void {
@@ -155,6 +174,22 @@ class PointerFieldScene implements SceneModule {
     // Click/down burst (desktop) and touch's hover-enter-on-move (mobile)
     // both arrive here as a non-null hit — queued and applied on the next
     // update() so it happens on the sim's own dt-stepped clock.
+    //
+    // Prefer the real hit's instanceId (already remapped to this scene's
+    // global PointerFieldSim index — see this class's header comment):
+    // centers the impulse on that exact instance's own current position,
+    // which is more precise than the raycast's hit.point (a point on the
+    // hit quad's flat surface, not necessarily the instance's own center).
+    // Falls back to hit.point for hand-built hits with no instanceId (e.g.
+    // a non-instanced-mesh raycast target, or a hit synthesized in tests).
+    if (this.sim && hit.instanceId != null) {
+      const gx = this.sim.posX[hit.instanceId];
+      const gy = this.sim.posY[hit.instanceId];
+      if (gx != null && gy != null) {
+        this.pendingImpulse = { x: gx, y: gy };
+        return;
+      }
+    }
     this.pendingImpulse = { x: hit.point.x, y: hit.point.y };
   }
 

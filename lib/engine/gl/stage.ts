@@ -22,6 +22,7 @@ import type {
   ViewContext,
   RendererLike,
 } from "../types";
+import type { RaycastCandidate } from "./raycast";
 import { View, type ViewOptions } from "./view";
 
 export interface StageFrameInput {
@@ -167,6 +168,45 @@ export class Stage {
     return this.views.size;
   }
 
+  /** Read-only snapshot of the most recently applied frame input
+   * (scroll/pointer/size/etc) — lets both RenderHost implementations drive
+   * gl/raycast.ts's shared `runViewRaycasts()` from the same state Stage
+   * itself just rendered with, instead of duplicating pointer/scroll
+   * bookkeeping in worker/render.worker.ts and worker/host.ts. */
+  get currentFrame(): Readonly<StageFrameInput> {
+    return this.frame;
+  }
+
+  /**
+   * Ready + in-view + interactive-target-registered views, as raycast
+   * candidates for gl/raycast.ts's `runViewRaycasts()`. Views nobody ever
+   * calls `ViewContext.registerInteractive()` for are skipped entirely — no
+   * wasted per-frame raycast against an empty target list, and no HIT
+   * message a scene could never have produced a hit for anyway.
+   */
+  raycastCandidates(): RaycastCandidate[] {
+    const viewportH = this.frame.size.height;
+    const scrollY = this.frame.scroll.current;
+    const out: RaycastCandidate[] = [];
+
+    for (const managed of this.views.values()) {
+      if (!managed.ready) continue;
+      const { view } = managed;
+      if (view.interactiveObjects.length === 0) continue;
+      if (!view.inView(scrollY, viewportH, this.cullMargin)) continue;
+
+      out.push({
+        viewId: view.id,
+        rect: view.rect,
+        camera: view.camera,
+        targets: view.interactiveObjects,
+        module: view.module,
+      });
+    }
+
+    return out;
+  }
+
   private buildContext(view: View): ViewContext {
     return {
       scene: view.scene,
@@ -178,6 +218,7 @@ export class Stage {
       size: this.frame.size,
       quality: this.frame.quality,
       reducedMotion: this.frame.reducedMotion,
+      registerInteractive: (objects) => view.setInteractive(objects),
     };
   }
 }

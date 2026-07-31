@@ -326,7 +326,7 @@ function makeViewContext(): ViewContext {
 }
 
 describe("picker scene.ts — SceneModule contract, end to end", () => {
-  it("init() populates the scene graph with a background quad + one group per flavor", async () => {
+  it("init() populates the scene graph with a background quad, lights, and one group per flavor", async () => {
     const scene = createPickerScene();
     const ctx = makeViewContext();
 
@@ -335,8 +335,17 @@ describe("picker scene.ts — SceneModule contract, end to end", () => {
     // scene.ts hangs everything off a single root group added to ctx.scene.
     expect(ctx.scene.children.length).toBe(1);
     const root = ctx.scene.children[0] as THREE.Group;
-    // bg quad + `flavors.length` can groups, at minimum.
-    expect(root.children.length).toBeGreaterThanOrEqual(1 + flavors.length);
+    // bg quad + 2 lights + the ring group, at minimum (see scene.ts's
+    // `ringGroup` doc comment for why the cans live one level deeper, in
+    // their own non-root-rotating group, instead of directly under root).
+    expect(root.children.length).toBeGreaterThanOrEqual(4);
+    expect(root.children.filter((c) => c instanceof THREE.Light)).toHaveLength(2);
+
+    const ringGroup = root.children.find(
+      (c) => c instanceof THREE.Group && c.children.length >= flavors.length
+    ) as THREE.Group | undefined;
+    expect(ringGroup).toBeDefined();
+    expect(ringGroup!.children.length).toBeGreaterThanOrEqual(flavors.length);
 
     scene.dispose();
   });
@@ -353,19 +362,28 @@ describe("picker scene.ts — SceneModule contract, end to end", () => {
     scene.dispose();
   });
 
-  it('invoke("select", [i]) is wired through to the carousel (rotates toward flavor i)', async () => {
+  it('invoke("select", [i]) is wired through to the carousel (rotates the ring toward flavor i)', async () => {
     const scene = createPickerScene();
     const ctx = makeViewContext();
     await scene.init(ctx);
 
+    // The carousel's rotation lives on the ring group (a child of root that
+    // isn't root itself — see scene.ts's `ringGroup` doc comment for why:
+    // root has to stay non-rotating so the bg quad/lights/text don't sweep
+    // around with the carousel), identified here as whichever group child
+    // holds all `flavors.length` can groups.
     const root = ctx.scene.children.find((c) => c instanceof THREE.Group) as THREE.Group | undefined;
     expect(root).toBeDefined();
-    const before = root!.rotation.y;
+    const ringGroup = root!.children.find(
+      (c) => c instanceof THREE.Group && c.children.length >= flavors.length
+    ) as THREE.Group | undefined;
+    expect(ringGroup).toBeDefined();
+    const before = ringGroup!.rotation.y;
 
     scene.invoke!("select", [2]);
     for (let i = 0; i < 60; i++) scene.update(1 / 60, ctx);
 
-    expect(root!.rotation.y).not.toBeCloseTo(before, 3);
+    expect(ringGroup!.rotation.y).not.toBeCloseTo(before, 3);
 
     scene.dispose();
   });

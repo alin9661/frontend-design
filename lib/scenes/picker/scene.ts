@@ -35,6 +35,18 @@ const CAROUSEL_RADIUS = 220;
 /** Depth (world z) of the fullscreen background-tint quad, behind every can. */
 const BG_QUAD_Z = -260;
 const FLAVOR_NAME_FONT_SIZE = 36;
+/** Ambient/key light intensities — matches hero-can/scene.ts's rig so the
+ * lit-material cans (buildCan) actually read instead of rendering as solid
+ * black silhouettes (a confirmed design-review bug: this scene never lit
+ * its cans at all). */
+const AMBIENT_INTENSITY = 0.65;
+const KEY_LIGHT_INTENSITY = 1.4;
+/** Fraction of the view's CSS width the carousel settles right-of-center
+ * (composition fix — see `ringGroup`'s doc comment on the class below).
+ * 0.3, not the design-review finding's literal 0.22, after visually
+ * confirming 0.22 still let the selected (CENTER_SCALE-enlarged) can clip
+ * the "Raspberry Yuzu" pill at 1440px. */
+const RING_X_OFFSET_FACTOR = 0.3;
 
 interface CanEntry {
   index: number;
@@ -48,6 +60,9 @@ function frustumHeightAtZ(camZ: number, fovDeg: number, targetZ: number): number
   return 2 * distance * Math.tan(fovRad / 2);
 }
 
+/** Full-bleed size (plus position, which never moves — see `ringGroup`'s
+ * comment for why the quad no longer needs to react to the carousel at
+ * all) for the bg quad at `BG_QUAD_Z`. */
 function sizeAndPositionBgQuad(mesh: THREE.Mesh, camera: THREE.PerspectiveCamera): void {
   const height = frustumHeightAtZ(camera.position.z, camera.fov, BG_QUAD_Z);
   const width = height * camera.aspect;
@@ -59,8 +74,34 @@ class PickerScene implements SceneModule {
   private carousel = new PickerCarousel(flavors.map((f) => f.bg));
   private disposeBag = new DisposeBag();
   private root: THREE.Group | null = null;
+  /**
+   * Holds only the cans and carries the carousel's rotation — kept as a
+   * SEPARATE, off-center child of `root` (not `root` itself) for two
+   * confirmed design-review bugs this fixes together:
+   *
+   *  1. "Picker background is a hard-edged wedge": the bg quad and lights
+   *     used to be siblings of the cans directly under the one group that
+   *     also carried the carousel's rotation, so THEY spun with it too —
+   *     the full-bleed tint quad swept around like a wedge instead of
+   *     staying a fixed backdrop. Now `root` (bgMesh/lights/text's parent)
+   *     never rotates at all; only `ringGroup` does.
+   *  2. "Carousel drifts off-center / cropped after selecting a flavor":
+   *     each can's position used to bake in a `-CAROUSEL_RADIUS` z-offset
+   *     directly, so the ring's own geometric center sat at
+   *     `(0,0,-CAROUSEL_RADIUS)` while the ROTATION PIVOT was the origin —
+   *     a point ON the ring's edge, not its center. Rotating around a
+   *     point on a circle's own circumference doesn't just re-aim the
+   *     circle, it swings the whole thing sideways. `ringGroup` puts that
+   *     `-CAROUSEL_RADIUS` offset on the GROUP itself (so the pivot IS the
+   *     ring's center) and each can's own local position is a plain
+   *     `(sin θ · R, 0, cos θ · R)` — a true circle around `ringGroup`'s
+   *     own origin, with no baked-in offset.
+   */
+  private ringGroup: THREE.Group | null = null;
   private bgMesh: THREE.Mesh | null = null;
   private bgMaterial: THREE.MeshBasicMaterial | null = null;
+  private ambientLight: THREE.AmbientLight | null = null;
+  private keyLight: THREE.DirectionalLight | null = null;
   private cans: CanEntry[] = [];
   private flavorText: GlText | null = null;
   private lastTextedIndex = -1;
@@ -74,6 +115,16 @@ class PickerScene implements SceneModule {
     this.root = new THREE.Group();
     ctx.scene.add(this.root);
 
+    // Lights are added to `root` (never rotates, unlike `ringGroup`) so the
+    // lit cans stay correctly shaded regardless of carousel rotation. A
+    // confirmed design-review bug: this scene built lit
+    // MeshStandardMaterial cans (buildCan) but never added any light at
+    // all, so every can rendered as a solid black silhouette.
+    this.ambientLight = new THREE.AmbientLight(0xffffff, AMBIENT_INTENSITY);
+    this.keyLight = new THREE.DirectionalLight(0xfff4e0, KEY_LIGHT_INTENSITY);
+    this.keyLight.position.set(1.2, 1.6, 1.4);
+    this.root.add(this.ambientLight, this.keyLight);
+
     const bgGeometry = new THREE.PlaneGeometry(1, 1);
     this.bgMaterial = new THREE.MeshBasicMaterial({ depthWrite: false, depthTest: false });
     this.bgMesh = new THREE.Mesh(bgGeometry, this.bgMaterial);
@@ -82,22 +133,29 @@ class PickerScene implements SceneModule {
     this.disposeBag.add(() => bgGeometry.dispose());
     this.disposeBag.add(() => this.bgMaterial?.dispose());
 
+    // See this class's `ringGroup` doc comment for why the radius offset
+    // lives on the group and each can's own local position is offset-free.
+    // The x offset is a composition fix (confirmed design-review finding):
+    // dead-center parking left the settled can competing with the DOM copy
+    // column and, at narrow widths, cropped near the edge — nudging the
+    // whole ring right of center gives the copy its own column and keeps
+    // the selected can clear of the flavor-pill row above it.
+    this.ringGroup = new THREE.Group();
+    this.ringGroup.position.set(ctx.rect.width * RING_X_OFFSET_FACTOR, 0, -CAROUSEL_RADIUS);
+    this.root.add(this.ringGroup);
+
     this.cans = flavors.map((flavor: Flavor, index: number) => {
       const label = createLabelTexture(flavor);
       const built = buildCan(flavor, { labelTexture: label });
       const theta = placementAngle(index, flavors.length);
-      built.group.position.set(
-        Math.sin(theta) * CAROUSEL_RADIUS,
-        0,
-        Math.cos(theta) * CAROUSEL_RADIUS - CAROUSEL_RADIUS
-      );
-      this.root!.add(built.group);
+      built.group.position.set(Math.sin(theta) * CAROUSEL_RADIUS, 0, Math.cos(theta) * CAROUSEL_RADIUS);
+      this.ringGroup!.add(built.group);
       this.disposeBag.add(built.dispose);
       this.disposeBag.add(() => label.dispose());
       return { index, group: built.group };
     });
 
-    this.applyFrame();
+    this.applyFrame(ctx);
 
     return loadFont(ctx.assets)
       .then((font) => {
@@ -108,6 +166,8 @@ class PickerScene implements SceneModule {
           align: "center",
         });
         this.lastTextedIndex = this.carousel.selectedIndex;
+        // Child of `root` (never rotates), NOT `ringGroup` — the flavor
+        // name must stay screen-facing regardless of carousel rotation.
         this.flavorText.object3d.position.set(0, -160, 40);
         this.root?.add(this.flavorText.object3d);
         this.disposeBag.add(() => this.flavorText?.dispose());
@@ -125,7 +185,7 @@ class PickerScene implements SceneModule {
     if (!ctx.reducedMotion) {
       this.carousel.step(dt);
     }
-    this.applyFrame();
+    this.applyFrame(ctx);
     sizeAndPositionBgQuad(this.bgMesh!, ctx.camera);
 
     if (this.flavorText && this.lastTextedIndex !== this.carousel.selectedIndex) {
@@ -142,17 +202,21 @@ class PickerScene implements SceneModule {
     this.disposeBag.disposeAll();
     this.root?.parent?.remove(this.root);
     this.root = null;
+    this.ringGroup = null;
     this.bgMesh = null;
     this.bgMaterial = null;
+    this.ambientLight = null;
+    this.keyLight = null;
     this.cans = [];
     this.flavorText = null;
     this.lastTextedIndex = -1;
   }
 
   /** Pushes the carousel's current (possibly just-damped) state onto the THREE scene graph. */
-  private applyFrame(): void {
-    if (!this.root) return;
-    this.root.rotation.y = this.carousel.angle;
+  private applyFrame(ctx?: ViewContext): void {
+    if (!this.root || !this.ringGroup) return;
+    this.ringGroup.rotation.y = this.carousel.angle;
+    if (ctx) this.ringGroup.position.x = ctx.rect.width * RING_X_OFFSET_FACTOR;
     for (const can of this.cans) {
       can.group.scale.setScalar(this.carousel.scaleFor(can.index));
     }

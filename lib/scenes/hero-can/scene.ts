@@ -32,9 +32,24 @@ const AMBIENT_INTENSITY = 0.65;
 const KEY_LIGHT_INTENSITY = 1.4;
 const RIM_EMISSIVE_INTENSITY = 1.6;
 
+// Composition fix (confirmed design-review finding): the can used to sit
+// dead-center behind the DOM copy column, so it photobombed the sub-copy
+// and severed the footnote mid-sentence, with no focal hierarchy between
+// type/product/stats. Offsetting it right + scaling it up turns it into a
+// confident right-side anchor instead, once SectionHero.tsx's copy column
+// is left-aligned to match (see that file).
+const CAN_X_OFFSET_FACTOR = 0.28; // × ctx.rect.width (CSS px == world units at z=0)
+const CAN_SCALE_FACTOR = 1.6;
+
 const HEADLINE_LINES = ["SMOOTH LIFT.", "ZERO CRASH."] as const;
 const HEADLINE_FONT_SIZE = 64; // px (world units)
-const HEADLINE_COLOR = 0xf9f9ee; // brand.cream
+// brand.forest (dark green) — was brand.cream (0xf9f9ee), which is
+// invisible against SectionHero.tsx's cream (`bg-cream`) background (a
+// confirmed `/deep-wave` design-review finding: cream-on-cream GL headline
+// text). The DOM <h1> stays the always-visible a11y/content source of
+// truth (see the file header); this GL layer is purely a bloom/glow accent
+// on top of the can, so it needs to actually read against the page bg.
+const HEADLINE_COLOR = 0x1d423c; // brand.forest (lib/flavors.ts's `brand.forest`)
 const HEADLINE_GLOW = 1.4;
 
 interface SpringState {
@@ -106,6 +121,8 @@ class HeroCanScene implements SceneModule {
     this.labelTexture = createLabelTexture(HERO_FLAVOR);
     this.built = buildCan(HERO_FLAVOR, { labelTexture: this.labelTexture });
     this.group = this.built.group;
+    this.group.position.x = ctx.rect.width * CAN_X_OFFSET_FACTOR;
+    this.group.scale.setScalar(CAN_SCALE_FACTOR);
     ctx.scene.add(this.group);
 
     this.setupLighting(ctx);
@@ -242,7 +259,15 @@ class HeroCanScene implements SceneModule {
 
       const layout = getCanLayout();
       const headlineGroup = new THREE.Group();
-      headlineGroup.position.set(0, layout.topOpeningY + layout.height * 0.18, layout.bodyRadius * 0.05);
+      // x follows the can's own composition offset (this.group.position.x,
+      // set in init()) — this GL layer is a glow accent ON the can, not an
+      // independent element, so it needs to move with it now that the can
+      // is no longer dead-center.
+      headlineGroup.position.set(
+        ctx.rect.width * CAN_X_OFFSET_FACTOR,
+        layout.topOpeningY + layout.height * 0.18,
+        layout.bodyRadius * 0.05
+      );
 
       let cursorY = 0;
       const built: Array<{ dispose(): void }> = [];

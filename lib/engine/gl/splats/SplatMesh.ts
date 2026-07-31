@@ -296,6 +296,15 @@ void main() {
 
 const RESORT_POS_THRESHOLD = 4; // world units (css px, per the engine's 1-unit=1px convention)
 const RESORT_DIR_DOT_THRESHOLD = 0.9998; // ~cos(1.1deg) — dot below this triggers a re-sort
+const SIGMA_CLIP = 3.0;
+// Was 0.75 (75% of NDC half-extent per axis — enormous): a confirmed
+// design-review finding on the splat-lounge scene found individual splats
+// blowing up into half-viewport soft blobs at close orbit distances, never
+// resolving into a recognizable can silhouette. Capped here independent of
+// the (also-fixed, see lib/scenes/splat-lounge/scene.ts) orbit distance so
+// a close camera or an external `?splat=` asset with unusually large scales
+// can't reproduce the same blown-out look.
+const MAX_NDC_RADIUS = 0.3;
 
 export interface SplatMeshStats {
   count: number;
@@ -388,8 +397,8 @@ export class SplatMesh {
         uColorTex: { value: colorTex },
         uQuatTex: { value: quatTex },
         uTexSize: { value: texSize },
-        uSigmaClip: { value: 3.0 },
-        uMaxNdcRadius: { value: 0.75 },
+        uSigmaClip: { value: SIGMA_CLIP },
+        uMaxNdcRadius: { value: MAX_NDC_RADIUS },
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,

@@ -35,12 +35,23 @@ export default function SectionPicker() {
     }
   }
 
+  // Text ink follows the selected flavor (lib/flavors.ts's `ink` token),
+  // not a fixed cream — a confirmed design-review finding: the section's
+  // copy was hardcoded cream, which is illegible (~1.4:1) against the
+  // lighter flavor backgrounds (lemon/peach/mango) once the GL bg crossfades
+  // to them, and only happened to work for the two dark flavors (mint,
+  // raspberry). The 300ms transition matches SectionPicker's GL bg crossfade
+  // (lib/scenes/picker/scene.ts's BG_LAMBDA-damped color) and the
+  // motion.div's own 0.3s tagline transition below.
+  const inkMuted = `${selected.ink}cc`; // ~80% opacity (0xcc / 255 ≈ 0.8), matching the old `/80` utility
+
   return (
     <section
       ref={viewRef}
       id="picker"
       aria-labelledby="deep-wave-picker-heading"
-      className="relative min-h-svh px-6 py-32 text-cream"
+      className="relative min-h-svh px-6 py-32"
+      style={{ color: selected.ink, transition: "color 300ms ease" }}
     >
       {/* Background lives in its own negative-z layer so the shared GL
           canvas (fixed z-0, rendered before every section) shows through
@@ -58,7 +69,7 @@ export default function SectionPicker() {
         >
           Choose Your Lift.
         </h2>
-        <p className="mt-6 max-w-xl font-body text-lg text-cream/80">
+        <p className="mt-6 max-w-xl font-body text-lg" style={{ color: inkMuted, transition: "color 300ms ease" }}>
           Five flavors. Zero AI input, despite the branding upstairs. Pick
           one — the can spins, the background answers, the AI takes no
           credit.
@@ -102,7 +113,7 @@ export default function SectionPicker() {
             transition={{ duration: 0.3, ease: "easeOut" }}
           >
             <p className="font-display uppercase text-2xl">{selected.name}</p>
-            <p className="mt-2 max-w-md font-body text-cream/80">
+            <p className="mt-2 max-w-md font-body" style={{ color: inkMuted }}>
               {selected.tagline}
             </p>
           </motion.div>

@@ -63,6 +63,11 @@ export class VirtualScroll {
 
     if (!this.reducedMotion) {
       this.wheelHandler = (e: WheelEvent): void => {
+        // Let the browser handle pinch/ctrl-wheel zoom (a11y-relevant — do
+        // NOT swallow page zoom) and purely-horizontal trackpad pans (this
+        // engine only ever consumes pixelY): bail before preventDefault so
+        // native behavior survives for both gestures.
+        if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
         e.preventDefault();
         const { pixelY } = normalizeWheel(e);
         this._state = {

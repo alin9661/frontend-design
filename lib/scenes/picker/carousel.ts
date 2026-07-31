@@ -23,8 +23,13 @@ export const CAROUSEL_LAMBDA = 8;
 export const BG_LAMBDA = 6;
 
 /** Centered can scale (damped toward); flanking cans damp toward `SIDE_SCALE`. */
-export const CENTER_SCALE = 1.35;
-export const SIDE_SCALE = 0.85;
+// Was 1.35 — trimmed slightly alongside scene.ts's RING_X_OFFSET_FACTOR
+// after visually confirming the larger front can clipped the flavor-pill
+// row at 1440px.
+export const CENTER_SCALE = 1.2;
+// Was 0.85 — a confirmed design-review finding asked flanking cans to
+// "recede" more clearly (~0.7x) instead of lining up at nearly-equal size.
+export const SIDE_SCALE = 0.7;
 
 /** Wraps an angle (radians) into (-PI, PI]. */
 export function wrapAngle(a: number): number {

@@ -34,6 +34,19 @@ interface OrbitState {
 
 const LOOK_AT_HEIGHT = CAN_HEIGHT * 0.4;
 
+// Orbit keyframes (confirmed design-review fix): the camera used to sit
+// roughly one can-height away from the subject (distance 1.3-1.7x
+// CAN_HEIGHT, height 0.55-0.9x), which is close enough that individual
+// splats blew up into half-viewport soft blobs instead of resolving into a
+// "can on a table" diorama. Pulled back to 3-3.5x distance / 0.8-1.2x
+// height (LOOK_AT_HEIGHT unchanged) so the cloud actually reads as a can
+// silhouette — paired with SplatMesh.ts's MAX_NDC_RADIUS cap on top.
+const ORBIT_DISTANCE_START = CAN_HEIGHT * 3.0;
+const ORBIT_DISTANCE_END = CAN_HEIGHT * 3.3;
+const ORBIT_HEIGHT_START = CAN_HEIGHT * 0.8;
+const ORBIT_HEIGHT_MID = CAN_HEIGHT * 1.2;
+const ORBIT_HEIGHT_END = CAN_HEIGHT * 0.9;
+
 class SplatLoungeScene implements SceneModule {
   private splat: SplatMesh | null = null;
   private timeline: Timeline = new Timeline();
@@ -54,13 +67,13 @@ class SplatLoungeScene implements SceneModule {
         { t: 1, v: Math.PI * 0.35, ease: easeInOutCubic },
       ])
       .add(this.orbit, "height", [
-        { t: 0, v: CAN_HEIGHT * 0.55 },
-        { t: 0.5, v: CAN_HEIGHT * 0.9 },
-        { t: 1, v: CAN_HEIGHT * 0.6 },
+        { t: 0, v: ORBIT_HEIGHT_START },
+        { t: 0.5, v: ORBIT_HEIGHT_MID },
+        { t: 1, v: ORBIT_HEIGHT_END },
       ])
       .add(this.orbit, "distance", [
-        { t: 0, v: 260 },
-        { t: 1, v: 340 },
+        { t: 0, v: ORBIT_DISTANCE_START },
+        { t: 1, v: ORBIT_DISTANCE_END },
       ]);
     this.timeline.sample(0);
     this.applyCamera(ctx.camera);

@@ -116,10 +116,24 @@ export function flowSpeedForProgress(p: number): number {
 }
 
 const CURL_SCALE = 0.012;
-const BASE_POINT_SIZE = 3; // px at dpr 1, before "sized by DPR"
+// Was 3 — a confirmed design-review finding: at 1px-scale, the (frozen,
+// design-doc-mandated — see PARTICLE_GRID_SIZE below) 128²-512² particle
+// counts read as dense speckle/sensor-dust rather than the intended "slow
+// drift of forest fog". The render shader already draws a soft
+// alpha-falloff circular sprite per particle (shaders.ts's
+// renderFragmentShader), not a hard square point, so — since count itself
+// is a frozen per-tier contract this scene can't change — size is the
+// lever: larger sprites let individual motes actually read as soft fog
+// instead of dithering artifacts.
+const BASE_POINT_SIZE = 8; // px at dpr 1, before "sized by DPR"
 const TITLE_TEXT = "ENERGY, RENDERED";
 const TITLE_FONT_SIZE = 42;
 const FOREST_HEX = 0x1d423c;
+/** Shifts the particle column (not the section title, which stays over the
+ * DOM headline it echoes) right of the copy/stats column — confirmed
+ * design-review fix: the cloud used to sit centered directly over
+ * "JITTERS DETECTED", burying it. */
+const EMITTER_X_OFFSET_FACTOR = 0.22; // × ctx.rect.width
 
 /** Reduced motion freezes the clock at a nonzero point in the cycle — a
  * plausible mid-flow moment, not everything sitting frozen at its seed. */
@@ -246,6 +260,7 @@ class ParticlesScene implements SceneModule {
 
     this.points = new THREE.Points(this.geometry, this.renderMaterial);
     this.points.frustumCulled = false;
+    this.points.position.x = ctx.rect.width * EMITTER_X_OFFSET_FACTOR;
     ctx.scene.add(this.points);
 
     // Text is the one async tail: everything above runs synchronously (JS

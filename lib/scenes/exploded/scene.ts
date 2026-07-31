@@ -33,10 +33,18 @@ import * as THREE from "three";
 import type { RectData, SceneModule, ViewContext } from "@/lib/engine/types";
 import { Timeline } from "@/lib/engine/gl/timeline";
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
-import { decor, flavors } from "@/lib/flavors";
+import { decor, flavorById, flavors } from "@/lib/flavors";
 
-/** Anatomy section isn't flavor-specific copy — any can from the lineup works. */
-const DEFAULT_FLAVOR_ID = flavors[0]!.id;
+// Anatomy section isn't flavor-specific copy, so any can from the lineup
+// "works" contractually — but `flavors[0]` (lemon, a light gold/mustard
+// can) is off-brand here: no other /deep-wave section uses that color, and
+// it clashes with the green/cream palette everywhere else on the page (a
+// confirmed design-review finding). Mint's can color is the same green
+// family hero-can/scene.ts uses for its own can.
+const DEFAULT_FLAVOR_ID = flavorById("mint").id;
+/** Shifts the whole exploded assembly right of the copy column (confirmed
+ * design-review fix, same composition pattern as hero-can/scene.ts). */
+const ASSEMBLY_X_OFFSET_FACTOR = 0.2; // × ctx.rect.width
 
 type CanPartKey = "lid" | "tab" | "shell" | "label";
 type LeafKey = "leaf0" | "leaf1" | "leaf2";
@@ -65,14 +73,19 @@ interface ExplodeTarget {
  * Exported so test/scenes/exploded.test.ts can assert exact expected
  * positions without duplicating magic numbers.
  */
+// Gaps widened (confirmed design-review fix — "the exploded can is
+// actually one tilted blob", parts overlapping enough to read as one mass
+// rather than a diagram) so each part clears its neighbors by a larger
+// margin at full explode (p=1), giving the leader lines an unambiguous,
+// visibly-separated endpoint to land on.
 export const EXPLODE_TARGETS: Record<PartKey, ExplodeTarget> = {
-  lid: { y: 190, rotX: 0.05, rotZ: 0 },
-  tab: { y: 300, rotX: 0.2, rotZ: 0.9 },
-  label: { y: -10, rotX: 0, rotZ: 0.35 },
-  shell: { y: -140, rotX: 0, rotZ: 0 },
-  leaf0: { y: -260, rotX: 0.25, rotZ: -0.4 },
-  leaf1: { y: -300, rotX: -0.2, rotZ: 0.5 },
-  leaf2: { y: -340, rotX: 0.15, rotZ: -0.25 },
+  lid: { y: 230, rotX: 0.05, rotZ: 0 },
+  tab: { y: 360, rotX: 0.2, rotZ: 0.9 },
+  label: { y: -30, rotX: 0, rotZ: 0.35 },
+  shell: { y: -180, rotX: 0, rotZ: 0 },
+  leaf0: { y: -320, rotX: 0.25, rotZ: -0.4 },
+  leaf1: { y: -370, rotX: -0.2, rotZ: 0.5 },
+  leaf2: { y: -420, rotX: 0.15, rotZ: -0.25 },
 };
 
 /** Normalized [0,1] rect offsets each leader line points at — see file header. */
@@ -151,6 +164,7 @@ class ExplodedScene implements SceneModule {
     const group = built.group;
     this.group = group;
     this.canDispose = built.dispose;
+    group.position.x = ctx.rect.width * ASSEMBLY_X_OFFSET_FACTOR;
     ctx.scene.add(group);
 
     for (const key of CAN_PART_KEYS) {

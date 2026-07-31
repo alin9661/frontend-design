@@ -13,6 +13,22 @@ import * as THREE from "three";
 const QUANT_BITS = 16;
 const QUANT_LEVELS = 1 << QUANT_BITS; // 65536
 
+// Module-level scratch, reused across calls instead of allocated fresh every
+// sort (the splat-lounge camera orbits continuously with scroll, so this
+// runs on nearly every re-sort threshold crossing during a scroll gesture —
+// see the workstream report's allocation-churn finding). `counts`/`offsets`
+// are always exactly QUANT_LEVELS long, so they're allocated once, ever.
+// `buckets` is proportional to splat count, so it only grows (never shrinks)
+// to the largest count seen so far and is sliced to the exact length needed.
+const scratchCounts = new Uint32Array(QUANT_LEVELS);
+const scratchOffsets = new Uint32Array(QUANT_LEVELS);
+let scratchBuckets = new Uint16Array(0);
+
+function bucketsScratch(count: number): Uint16Array {
+  if (scratchBuckets.length < count) scratchBuckets = new Uint16Array(count);
+  return scratchBuckets.subarray(0, count);
+}
+
 /**
  * View-space depth (more negative = farther from camera, matching three.js's
  * -Z-forward camera convention) for every splat position, via `viewMatrix`
@@ -67,26 +83,29 @@ export function sortIndices(positions: Float32Array, viewMatrix: THREE.Matrix4, 
   }
   const range = max - min || 1e-6;
 
-  const buckets = new Uint16Array(count);
+  const buckets = bucketsScratch(count);
   for (let i = 0; i < count; i++) {
     const t = (depths[i]! - min) / range; // 0 = farthest, 1 = nearest
     buckets[i] = Math.min(QUANT_LEVELS - 1, Math.max(0, Math.round(t * (QUANT_LEVELS - 1))));
   }
 
-  const counts = new Uint32Array(QUANT_LEVELS);
+  const counts = scratchCounts;
+  counts.fill(0);
   for (let i = 0; i < count; i++) counts[buckets[i]!]!++;
 
-  const offsets = new Uint32Array(QUANT_LEVELS);
+  // `offsets` doubles as the scatter cursor: each slot is incremented as
+  // it's consumed below, and (unlike the old `cursor = offsets.slice()`
+  // copy) nothing downstream needs the original prefix-sum values afterward.
+  const offsets = scratchOffsets;
   let sum = 0;
   for (let b = 0; b < QUANT_LEVELS; b++) {
     offsets[b] = sum;
     sum += counts[b]!;
   }
 
-  const cursor = offsets.slice();
   for (let i = 0; i < count; i++) {
     const b = buckets[i]!;
-    result[cursor[b]!++] = i;
+    result[offsets[b]!++] = i;
   }
 
   return result;

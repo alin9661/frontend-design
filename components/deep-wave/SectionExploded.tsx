@@ -1,9 +1,14 @@
 // components/deep-wave/SectionExploded.tsx
 //
 // Section 2/6 (design doc §5): the can decomposes into lid/tab/shell/label/
-// leaf planes on a scrubbing Timeline. DOM/copy is the M0 shell the leader
-// lines will anchor to, untouched. M1 wires `useView` (real "exploded"
-// scene lands in M2; uses the M1 checkpoint "placeholder" scene for now).
+// leaf planes on a scrubbing Timeline (see lib/scenes/exploded/scene.ts).
+// This DOM copy is complete and readable with zero GL; the "exploded" scene
+// renders behind it via EngineProvider's shared canvas and drives its
+// Timeline from this section's scroll progress. Leader lines anchor toward
+// normalized offsets within this section's rect — see the convention
+// documented at the top of lib/scenes/exploded/scene.ts, which loosely
+// tracks the PARTS grid below (kept in comment-sync manually since the
+// scene module can't read DOM layout — it's worker-safe).
 
 "use client";
 
@@ -28,7 +33,7 @@ const PARTS: Array<{ name: string; note: string }> = [
 ];
 
 export default function SectionExploded() {
-  const viewRef = useView("placeholder");
+  const viewRef = useView("exploded");
 
   return (
     <section
@@ -38,8 +43,8 @@ export default function SectionExploded() {
       className="relative min-h-svh bg-forest px-6 py-32 text-cream"
     >
       {/* The exploded-can view renders behind this copy via EngineProvider's
-          shared canvas; onProgress(p) will drive its Timeline once the real
-          "exploded" scene lands in M2. */}
+          shared canvas; onProgress(p) drives lib/scenes/exploded/scene.ts's
+          Timeline as this section scrolls through view. */}
       <div className="mx-auto max-w-3xl">
         <h2
           id="deep-wave-exploded-heading"

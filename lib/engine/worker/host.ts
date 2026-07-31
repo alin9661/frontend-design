@@ -34,6 +34,14 @@ import type {
   SceneModule,
   WorkerToMain,
 } from "../types";
+import {
+  DEFAULT_POINTER,
+  DEFAULT_SCROLL,
+  MAX_DT_S,
+  StatsReporter,
+  collectSceneStats,
+  frameStateToScrollPointer,
+} from "./frame-shared";
 import { unpackFrameState } from "./protocol";
 import { loadScene } from "./scene-registry";
 
@@ -152,10 +160,6 @@ export class WorkerHost implements RenderHost {
 // MainThreadHost — drives gl/Stage directly on the main thread.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_SCROLL: ScrollState = { target: 0, current: 0, velocity: 0, progress: 0, limit: 0 };
-const DEFAULT_POINTER: PointerState = { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false };
-const STATS_INTERVAL_MS = 1000;
-
 export interface MainThreadHostDeps {
   /** Test seam: defaults to gl/renderer.ts's `createRenderer` (real THREE.WebGLRenderer). */
   createRenderer?: (canvas: HTMLCanvasElement) => RendererLike;
@@ -186,13 +190,30 @@ export class MainThreadHost implements RenderHost {
    * gl/raycast.ts's shared `runViewRaycasts()` each `frame()` call — see
    * render.worker.ts's identical `raycasters` module state. */
   private readonly raycasters = new Map<number, ViewRaycaster>();
+  /**
+   * Per-viewId generation counter — bumped on every `addView`/`removeView`
+   * call. `addView`'s `loadScene()` is async; without this, a
+   * `removeView(id)` that lands while a scene is still loading left the
+   * eventual `.then()` free to resurrect the view (re-adding it to
+   * `moduleByView`/`Stage` after the caller already considered it gone), and
+   * a fast remove-then-re-add of the SAME viewId could race two in-flight
+   * loads into calling `Stage.addView` for the same id twice (design review
+   * item B). Captured at the start of `addView`; the `.then()` callback
+   * disposes the loaded module instead of registering it if the counter has
+   * since moved on.
+   */
+  private readonly viewGeneration = new Map<number, number>();
   private readonly listeners = new Set<(m: WorkerToMain) => void>();
   private unsubscribeAssetProgress: (() => void) | null = null;
 
   private lastFrameTime: number | null = null;
-  private statsAccumMs = 0;
-  private statsAccumFrames = 0;
-  private lastStatsPostTime = 0;
+  /** Last-known scroll/pointer state, retained across `resize()` calls (F4
+   * fix — see this class's `resize()` for why `buildFrameInput()` must NOT
+   * fall back to DEFAULT_SCROLL/DEFAULT_POINTER once a real frame has
+   * arrived). */
+  private lastScroll: ScrollState = DEFAULT_SCROLL;
+  private lastPointer: PointerState = DEFAULT_POINTER;
+  private readonly stats = new StatsReporter();
 
   constructor(deps: MainThreadHostDeps = {}) {
     this.createRendererImpl = deps.createRenderer ?? ((canvas) => createRenderer({ canvas }));
@@ -238,8 +259,19 @@ export class MainThreadHost implements RenderHost {
   }
 
   addView(viewId: number, sceneId: SceneId, rect: RectData): void {
+    const generation = this.bumpGeneration(viewId);
     loadScene(sceneId)
       .then((module) => {
+        if (this.viewGeneration.get(viewId) !== generation) {
+          // Superseded by a removeView()/addView() that happened while this
+          // scene was still loading — dispose the orphaned module instead of
+          // resurrecting a view nobody wants anymore, and don't touch
+          // Stage/moduleByView (which may already hold a NEWER load's
+          // result for this same viewId) — see this class's `viewGeneration`
+          // doc comment (design review item B).
+          module.dispose();
+          return;
+        }
         this.moduleByView.set(viewId, module);
         this.stage?.addView(viewId, rect, module);
       })
@@ -249,8 +281,17 @@ export class MainThreadHost implements RenderHost {
   }
 
   removeView(viewId: number): void {
+    this.bumpGeneration(viewId);
     this.stage?.removeView(viewId);
     this.moduleByView.delete(viewId);
+  }
+
+  /** Invalidates any in-flight `addView()` load for `viewId` and returns the
+   * new generation — see `viewGeneration`'s doc comment. */
+  private bumpGeneration(viewId: number): number {
+    const next = (this.viewGeneration.get(viewId) ?? 0) + 1;
+    this.viewGeneration.set(viewId, next);
+    return next;
   }
 
   invoke(viewId: number, method: string, args: unknown[]): void {
@@ -266,34 +307,19 @@ export class MainThreadHost implements RenderHost {
     if (!this.renderer || !this.stage) return;
 
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const dt = this.lastFrameTime == null ? 0 : Math.min((now - this.lastFrameTime) / 1000, 0.064);
+    const dt = this.lastFrameTime == null ? 0 : Math.min((now - this.lastFrameTime) / 1000, MAX_DT_S);
     this.lastFrameTime = now;
 
     const unpacked = unpackFrameState(state);
-    const scroll: ScrollState = {
-      // FRAME_STATE only carries current/velocity/progress — VirtualScroll's
-      // target/limit bookkeeping is main-thread-only and not needed by
-      // Stage, so target mirrors current here.
-      target: unpacked.scrollCurrent,
-      current: unpacked.scrollCurrent,
-      velocity: unpacked.scrollVelocity,
-      progress: unpacked.scrollProgress,
-      limit: 0,
-    };
-    const pointer: PointerState = {
-      x: unpacked.pointerX,
-      y: unpacked.pointerY,
-      vx: unpacked.pointerVX,
-      vy: unpacked.pointerVY,
-      down: false,
-      inside: true,
-    };
+    const { scroll, pointer } = frameStateToScrollPointer(unpacked);
+    this.lastScroll = scroll;
+    this.lastPointer = pointer;
 
     for (const v of unpacked.views) {
       this.stage.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height });
     }
 
-    this.stage.setFrame(this.buildFrameInput(scroll, pointer));
+    this.stage.setFrame(this.buildFrameInput());
 
     const reducedMotion = this.opts?.reducedMotion ?? false;
     // Reduced motion: static frames — advance no scene animation state, but
@@ -326,6 +352,9 @@ export class MainThreadHost implements RenderHost {
     if (this.renderer) {
       setSize(this.renderer, w, h, dpr, this.opts?.quality ?? "high");
     }
+    // F4 fix: retain the last-known scroll/pointer state (see
+    // `lastScroll`/`lastPointer`'s doc comment) — a resize must not snap
+    // scroll/pointer back to DEFAULTS before the next real FRAME_STATE tick.
     this.stage?.setFrame(this.buildFrameInput());
   }
 
@@ -342,15 +371,15 @@ export class MainThreadHost implements RenderHost {
     this.renderer = null;
     this.assets = null;
     this.lastFrameTime = null;
-    this.statsAccumMs = 0;
-    this.statsAccumFrames = 0;
+    this.lastScroll = DEFAULT_SCROLL;
+    this.lastPointer = DEFAULT_POINTER;
     this.listeners.clear();
   }
 
-  private buildFrameInput(scroll: ScrollState = DEFAULT_SCROLL, pointer: PointerState = DEFAULT_POINTER): StageFrameInput {
+  private buildFrameInput(): StageFrameInput {
     return {
-      scroll,
-      pointer,
+      scroll: this.lastScroll,
+      pointer: this.lastPointer,
       size: this.size,
       quality: this.currentQuality(),
       reducedMotion: this.opts?.reducedMotion ?? false,
@@ -366,28 +395,9 @@ export class MainThreadHost implements RenderHost {
     });
   }
 
-  /**
-   * Sums every registered view's SceneModule.getStats() (optional, additive
-   * — see types.ts). Only splat-lounge implements it today, surfacing its
-   * SplatMesh's real splat count/sortMs instead of the hardcoded 0/0 this
-   * replaces (see the gap documented in components/deep-wave/SectionSplats.tsx).
-   */
-  private collectSceneStats(): { splats: number; sortMs: number } {
-    let splats = 0;
-    let sortMs = 0;
-    for (const module of this.moduleByView.values()) {
-      const s = module.getStats?.();
-      if (!s) continue;
-      splats += s.splats ?? 0;
-      sortMs = Math.max(sortMs, s.sortMs ?? 0);
-    }
-    return { splats, sortMs };
-  }
-
   private postStats(now: number, renderMs: number): void {
-    this.statsAccumMs += renderMs;
-    this.statsAccumFrames += 1;
-    if (now - this.lastStatsPostTime < STATS_INTERVAL_MS) return;
+    const ms = this.stats.record(now, renderMs);
+    if (ms == null) return;
 
     // this.renderer.info is real THREE.WebGLRenderer draw-call bookkeeping
     // (optional on RendererLike — absent on plain test mocks). gl/renderer.ts
@@ -395,18 +405,9 @@ export class MainThreadHost implements RenderHost {
     // Stage.render(), so by the time we read it here it holds the total
     // calls across every view drawn this frame (previously hardcoded to 0).
     const drawCalls = this.renderer?.info?.render.calls ?? 0;
-    const { splats, sortMs } = this.collectSceneStats();
+    const { splats, sortMs } = collectSceneStats(this.moduleByView.values());
 
-    this.emit({
-      type: "STATS",
-      ms: this.statsAccumFrames > 0 ? this.statsAccumMs / this.statsAccumFrames : 0,
-      drawCalls,
-      splats,
-      sortMs,
-    });
-    this.statsAccumMs = 0;
-    this.statsAccumFrames = 0;
-    this.lastStatsPostTime = now;
+    this.emit({ type: "STATS", ms, drawCalls, splats, sortMs });
   }
 
   private emit(m: WorkerToMain): void {

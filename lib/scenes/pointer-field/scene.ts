@@ -27,6 +27,7 @@
 // once per view so each mounted view gets its own instance/state.
 
 import * as THREE from "three";
+import { setInstanceIndexMap } from "@/lib/engine/gl/raycast";
 import type { PointerHit, SceneModule, ViewContext } from "@/lib/engine/types";
 import { PointerFieldSim, createHomeGrid, colorForInstance, type FieldItemKind } from "./sim";
 
@@ -131,8 +132,8 @@ class PointerFieldScene implements SceneModule {
     // See this class's header comment: lets gl/raycast.ts's toPointerHit
     // remap each mesh's own local instanceId back to the shared PointerFieldSim
     // global index space.
-    this.leafMesh.userData.instanceIndexMap = this.leafIndices;
-    this.berryMesh.userData.instanceIndexMap = this.berryIndices;
+    setInstanceIndexMap(this.leafMesh, this.leafIndices);
+    setInstanceIndexMap(this.berryMesh, this.berryIndices);
 
     ctx.scene.add(this.leafMesh);
     ctx.scene.add(this.berryMesh);

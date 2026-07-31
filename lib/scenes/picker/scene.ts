@@ -1,21 +1,13 @@
 // lib/scenes/picker/scene.ts
 //
 // Section 6/6 (docs/deep-wave-engine-design.md §5 row 6): all 5 flavors as
-// cans on a circular carousel. Consumes the can contract verbatim (owner:
-// hero-can agent) and the text contract verbatim (owner: text agent) — see
-// this workstream's returned notes for the resulting mid-parallel friction:
-// as of this writing neither `@/lib/scenes/hero-can/can-geometry` nor
-// `@/lib/engine/gl/text` exist yet, so THIS file cannot be imported (by
-// Vitest or by Next) until those workstreams land, exactly like the
-// tsc/"other workstreams' not-yet-landed files" caveat this task was briefed
-// with — just the runtime-import version of it rather than the type-check
-// version. All actually-interesting behavior (carousel angle math, damped
-// convergence, invoke dispatch, disposal bookkeeping) therefore lives in
-// ./carousel.ts and ./dispose-bag.ts, which have zero dependency on either
-// contract and so ARE fully unit-tested today (test/scenes/picker.test.ts).
-// This file is deliberately a thin GL-wiring layer over those two: once the
-// sibling workstreams land, integration should need no changes here beyond
-// resolving imports.
+// cans on a circular carousel, wired over `@/lib/scenes/hero-can` (can
+// geometry/label) and `@/lib/engine/gl/text` (flavor-name headline). All
+// actually-interesting behavior (carousel angle math, damped convergence,
+// invoke dispatch, disposal bookkeeping) lives in ./carousel.ts and
+// ./dispose-bag.ts, which have zero dependency on either contract and so are
+// unit-tested independently of this file (test/scenes/picker.test.ts); this
+// file is a thin GL-wiring layer over those two plus the can/text contracts.
 //
 // Default export is a FACTORY (`() => SceneModule`), matching
 // lib/scenes/placeholder/scene.ts's convention — scene-registry.ts calls it
@@ -155,14 +147,11 @@ class PickerScene implements SceneModule {
       return { index, group: built.group };
     });
 
-    // Registers each flavor's can group as a raycast target (design doc §4A
-    // raycast gap) — wires HIT{viewId, hit|null} for main-side consumers
-    // (see gl/raycast.ts's shared runViewRaycasts()); this scene doesn't
-    // implement onPointer itself today (selection flows through the real
-    // DOM buttons + invoke("select", [i]) per design doc §5 row 6), but
-    // registering costs nothing extra and leaves hover/click-driven
-    // selection wireable later without touching worker/host.ts again.
-    ctx.registerInteractive?.(this.cans.map((can) => can.group));
+    // Not registered as a raycast target (design review item D): selection
+    // flows entirely through the real DOM buttons + invoke("select", [i])
+    // per design doc §5 row 6, so registering these groups would only cost
+    // a real per-frame raycast against 5 targets for zero payoff today.
+    // Re-register when hover-selection lands (see TODOS.md).
 
     this.applyFrame(ctx);
 

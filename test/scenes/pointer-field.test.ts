@@ -361,6 +361,31 @@ describe("pointer-field SceneModule", () => {
     scene.dispose();
   });
 
+  it("design review item E12: onPointer with an out-of-range instanceId falls back to hit.point instead of crashing or producing NaN", () => {
+    const scene = createPointerFieldScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const before = snapshotMatrices(ctx);
+    // instanceId 99999 is far beyond TOTAL_COUNT (300) — sim.posX/posY index
+    // reads for it are `undefined`, not a real position, so scene.ts's
+    // `gx != null && gy != null` guard must reject it and fall back to
+    // hit.point (here inside the field, at the origin) rather than indexing
+    // in with `undefined` and producing NaN positions.
+    expect(() =>
+      scene.onPointer!({ x: 0, y: 0, point: { x: 0, y: 0, z: 0 }, distance: 1, instanceId: 99999 })
+    ).not.toThrow();
+    expect(() => scene.update(1 / 60, ctx)).not.toThrow();
+    const after = snapshotMatrices(ctx);
+
+    expect(anyChanged(before, after)).toBe(true); // the hit.point fallback still produced a real impulse
+    for (const elements of after.values()) {
+      for (const v of elements) expect(Number.isNaN(v)).toBe(false);
+    }
+
+    scene.dispose();
+  });
+
   it("onPointer is inert once reducedMotion is set (no queued impulse, no crash)", () => {
     const scene = createPointerFieldScene();
     const ctx = makeCtx({ reducedMotion: true });

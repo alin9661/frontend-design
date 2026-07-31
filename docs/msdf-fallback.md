@@ -1,17 +1,9 @@
 # MSDF atlas fallback
 
 The build-time MSDF atlas generation (`scripts/gen-msdf.ts`, via
-`msdf-bmfont-xml`'s native `msdfgen` binary) failed on this machine after
-2 attempts:
-
-```
-TypeError: undefined is not an object (evaluating 'font.outlinesFormat')
-    at generateBMFont (/Users/aaronlin/Downloads/Projects/Frontend/node_modules/msdf-bmfont-xml/index.js:131:7)
-    at <anonymous> (/Users/aaronlin/Downloads/Projects/Frontend/scripts/gen-msdf.ts:85:5)
-    at new Promise (native:1:11)
-    at attemptGenerate (/Users/aaronlin/Downloads/Projects/Frontend/scripts/gen-msdf.ts:84:14)
-    at main (/Users/aaronlin/Downloads/Projects/Frontend/scripts/gen-msdf.ts:124:40)
-```
+`msdf-bmfont-xml`'s native `msdfgen` binary) has failed on this machine —
+`msdf-bmfont-xml`'s bundled `msdfgen` binary does not run in this
+environment.
 
 ## What this means
 
@@ -41,4 +33,6 @@ build-time one.
 `msdfgen` needs a working native binary for this platform. Common fixes:
 reinstall `msdf-bmfont-xml` (`bun add -d msdf-bmfont-xml`), or generate the
 atlas on a machine/CI image with the required shared libraries and commit
-the resulting `anton.png`/`anton.json` here.
+the resulting `anton.png`/`anton.json` here. Run `bun run scripts/gen-msdf.ts`
+to retry; a genuine font/config bug now exits non-zero instead of silently
+falling back (see `isNativeToolchainFailure` in that script).

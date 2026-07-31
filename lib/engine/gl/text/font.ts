@@ -1,7 +1,7 @@
 // lib/engine/gl/text/font.ts
 //
 // Shared font-metrics contract for gl/text/ (design doc §4C) + the bmfont
-// JSON parser for the (currently unavailable — see public/msdf/FALLBACK.md)
+// JSON parser for the (currently unavailable — see docs/msdf-fallback.md)
 // build-time MSDF atlas. `FontMetrics`/`GlyphMetrics` are the plain-data
 // shape BOTH text sources (a parsed bmfont atlas and the runtime tiny-sdf
 // atlas built by sdf-atlas.ts) normalize into, so layout.ts and MsdfText.ts

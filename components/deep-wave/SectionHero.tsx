@@ -1,10 +1,25 @@
 // components/deep-wave/SectionHero.tsx
 //
 // Section 1/6 (design doc §5): procedural can hero. DOM/copy is the M0
-// shell, untouched — this section already works with zero GL. M1 wires
-// `useView` so this section's rect is tracked by the shared engine; the
-// real "hero-can" scene lands in M2, so it uses the M1 checkpoint
-// "placeholder" scene for now (per §7's build phasing).
+// shell — the source of truth for both content and a11y, unconditionally
+// visible whether or not GL ever mounts (canvas is `aria-hidden`, GL-less
+// browsers/reduced-motion/context-loss all still render this section
+// correctly with zero JS beyond React itself).
+//
+// a11y note on the MSDF/SDF headline (lib/scenes/hero-can/scene.ts): the
+// design doc's progressive-enhancement sketch says to visually hide this
+// DOM `<h1>` (keeping it screen-reader-only) once GL text is confirmed
+// active, letting the GL glyphs be the sole visual carrier. This section
+// deliberately does NOT do that: `lib/scenes/` (like gl/) may not import
+// document/window/react (worker-safe layering law) and — when the
+// WorkerHost path is active — the text actually renders in a different
+// thread entirely, so there is no in-contract signal path for "GL text
+// mounted" to reach back into this React component (WorkerToMain's message
+// union is a frozen, worker-workstream-owned contract this section doesn't
+// extend). Keeping the DOM headline permanently visible is the simplest
+// a11y-safe choice available under the current contracts: the GL headline
+// is purely an additive bloom/glow layer, so there's nothing to reconcile
+// even if it never loads (module missing, font failure, reduced motion).
 
 "use client";
 
@@ -12,7 +27,7 @@ import { useView } from "@/lib/engine/react/useView";
 import GagStats from "./GagStats";
 
 export default function SectionHero() {
-  const viewRef = useView("placeholder");
+  const viewRef = useView("hero-can");
 
   return (
     <section

@@ -1,11 +1,18 @@
 // components/deep-wave/SectionSplats.tsx
 //
-// Section 5/6 (design doc §5): synthesizeCanScene() Gaussian splat set,
-// camera orbiting on scroll. DOM/copy is the M0 shell, untouched; the real
-// HUD numbers (splat count, sortMs) come from `?debug` + worker STATS
-// messages, already wired in DebugHud.tsx. M1 wires `useView` here (real
-// "splat-lounge" scene lands in M2; uses the M1 checkpoint "placeholder"
-// scene for now).
+// Section 5/6 (design doc §5): synthesizeCanScene() Gaussian splat set
+// (lib/scenes/splat-lounge/scene.ts), camera orbiting on scroll via
+// SplatMesh + Timeline. DOM/copy is the M0 shell, untouched; the live HUD
+// numbers (splat count, sortMs) come from `?debug` + worker STATS messages
+// (DebugHud.tsx) rather than local prop plumbing here — STATS is already a
+// global (not per-view) channel in the current worker/host contract, so a
+// per-section stat readout would either duplicate that global number or
+// need a new per-view stats channel neither host implementation exposes yet
+// (see the workstream return notes for the exact gap: render.worker.ts /
+// host.ts's MainThreadHost both hardcode `splats: 0, sortMs: 0` today since
+// gl/Stage has no per-view SceneModule getter for either host to read
+// `SplatMesh.stats` through — a cross-workstream wiring gap, not something
+// fixable from this section component alone).
 
 "use client";
 
@@ -13,7 +20,7 @@ import { useView } from "@/lib/engine/react/useView";
 import GagStats from "./GagStats";
 
 export default function SectionSplats() {
-  const viewRef = useView("placeholder");
+  const viewRef = useView("splat-lounge");
 
   return (
     <section
@@ -23,10 +30,10 @@ export default function SectionSplats() {
       className="relative min-h-svh bg-cream px-6 py-32 text-forest"
     >
       {/* SplatMesh renders behind this copy via EngineProvider's shared
-          canvas once the real "splat-lounge" scene lands in M2; scroll
-          orbits the camera around the synthesized can + table + ambient-puff
-          splat set. Also honors ?splat=<url> to load an external .splat/
-          .ply. */}
+          canvas; scroll orbits the camera around the synthesized can +
+          table + ambient-puff splat set (lib/scenes/splat-lounge/scene.ts).
+          ?splat=<url> external .splat/.ply loading is not yet wired — see
+          scene.ts's header comment for why. */}
       <div className="mx-auto max-w-3xl">
         <h2
           id="deep-wave-splats-heading"

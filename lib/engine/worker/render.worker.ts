@@ -11,18 +11,25 @@
 // specifier, required for Next 15/webpack worker bundling).
 //
 // This mirrors worker/host.ts's MainThreadHost pipeline as closely as gl/'s
-// current public API allows — see the two TODO/NOTE comments below for the
-// two spots where it can't (Post's composer needs a fixed scene/camera at
-// construction, and Stage exposes no per-view scene/camera/targets getter
-// for raycasting). Both are cross-workstream contract gaps for whoever
-// extends gl/Stage next, not bugs in this file — see the M1 "worker"
-// workstream return notes.
+// current public API allows — see the TODO/NOTE comment below for the one
+// remaining spot where it can't (Post's composer needs a fixed scene/camera
+// at construction; Stage doesn't yet expose a per-view scene/camera/targets
+// getter for raycasting). That's a cross-workstream contract gap for
+// whoever extends gl/Stage next, not a bug in this file — see the M1
+// "worker" workstream return notes.
+//
+// SCENE_INVOKE routing: Stage also has no per-view SceneModule getter, but
+// (like MainThreadHost, see host.ts) this file keeps its own viewId ->
+// SceneModule map alongside Stage's so `invoke()` (e.g. the picker scene's
+// carousel select RPC) reaches the right view's module instead of being
+// silently dropped — matching MainThreadHost's behavior exactly (design doc
+// §4A: "Both implement the same RenderHost interface identically").
 
 import { AssetManager } from "../gl/assets";
 import { ContextLossHandler, type ContextLossTarget } from "../gl/context-loss";
 import { createRenderer, setSize } from "../gl/renderer";
 import { Stage, type StageFrameInput } from "../gl/stage";
-import type { MainToWorker, QualityTier, RectData, SceneId, WorkerToMain } from "../types";
+import type { MainToWorker, QualityTier, RectData, SceneId, SceneModule, WorkerToMain } from "../types";
 import { unpackFrameState } from "./protocol";
 import { loadScene } from "./scene-registry";
 
@@ -50,6 +57,9 @@ const DEFAULT_POINTER = { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false }
 let renderer: ReturnType<typeof createRenderer> | null = null;
 let stage: Stage | null = null;
 let assets: AssetManager | null = null;
+/** Stage exposes no per-view module getter (needed for SCENE_INVOKE
+ * routing) — mirrors MainThreadHost's moduleByView map (host.ts). */
+const moduleByView = new Map<number, SceneModule>();
 let contextLoss: ContextLossHandler | null = null;
 let quality: QualityTier = "high";
 let reducedMotion = false;
@@ -98,14 +108,10 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
       break;
     case "VIEW_REMOVE":
       stage?.removeView(msg.viewId);
+      moduleByView.delete(msg.viewId);
       break;
     case "SCENE_INVOKE":
-      // Stage has no per-view SceneModule getter yet (see the block comment
-      // above) — SCENE_INVOKE can't be routed until gl/Stage exposes one.
-      console.warn(
-        `[deep-wave worker] SCENE_INVOKE for view ${msg.viewId} dropped: ` +
-          "Stage doesn't expose a per-view SceneModule getter yet"
-      );
+      moduleByView.get(msg.viewId)?.invoke?.(msg.method, msg.args);
       break;
     case "SET_REDUCED_MOTION":
       reducedMotion = msg.on;
@@ -168,6 +174,7 @@ function handleResize(width: number, height: number, dpr: number): void {
 function handleViewAdd(viewId: number, sceneId: SceneId, rect: RectData): void {
   loadScene(sceneId)
     .then((module) => {
+      moduleByView.set(viewId, module);
       stage?.addView(viewId, rect, module);
     })
     .catch((err: unknown) => {
@@ -181,6 +188,7 @@ function handleDispose(): void {
   contextLoss = null;
   stage?.dispose();
   stage = null;
+  moduleByView.clear();
   renderer?.dispose();
   renderer = null;
   assets = null;

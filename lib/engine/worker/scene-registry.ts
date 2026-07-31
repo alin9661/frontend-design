@@ -13,22 +13,21 @@ import type { SceneId, SceneModule } from "../types";
 
 export type SceneLoader = () => Promise<SceneModule>;
 
-function notImplemented(id: SceneId): SceneLoader {
-  return () =>
-    Promise.reject(
-      new Error(`scene-registry: scene "${id}" is not implemented yet (lands in M2)`)
-    );
-}
-
 export const sceneRegistry: Record<SceneId, SceneLoader> = {
   placeholder: () =>
     import("@/lib/scenes/placeholder/scene").then((m) => m.default()),
-  "hero-can": notImplemented("hero-can"),
-  exploded: notImplemented("exploded"),
-  particles: notImplemented("particles"),
-  "pointer-field": notImplemented("pointer-field"),
-  "splat-lounge": notImplemented("splat-lounge"),
-  picker: notImplemented("picker"),
+  "hero-can": () =>
+    import("@/lib/scenes/hero-can/scene").then((m) => m.default()),
+  exploded: () =>
+    import("@/lib/scenes/exploded/scene").then((m) => m.default()),
+  particles: () =>
+    import("@/lib/scenes/particles/scene").then((m) => m.default()),
+  "pointer-field": () =>
+    import("@/lib/scenes/pointer-field/scene").then((m) => m.default()),
+  "splat-lounge": () =>
+    import("@/lib/scenes/splat-lounge/scene").then((m) => m.default()),
+  picker: () =>
+    import("@/lib/scenes/picker/scene").then((m) => m.default()),
 };
 
 export function loadScene(id: SceneId): Promise<SceneModule> {

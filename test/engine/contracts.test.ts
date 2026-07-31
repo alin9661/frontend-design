@@ -304,21 +304,24 @@ describe("lib/scenes/placeholder — SceneModule shape", () => {
     expect(ctx.scene.children.length).toBe(0);
   });
 
-  it("scene-registry resolves 'placeholder' and rejects not-yet-implemented ids", async () => {
-    const mod = await loadScene("placeholder");
-    expect(typeof mod.init).toBe("function");
+  it("scene-registry resolves every registered scene id to a real SceneModule", async () => {
+    const ids = [
+      "placeholder",
+      "hero-can",
+      "exploded",
+      "particles",
+      "pointer-field",
+      "splat-lounge",
+      "picker",
+    ] as const;
 
-    await expect(loadScene("hero-can")).rejects.toThrow(/not implemented/);
-    expect(Object.keys(sceneRegistry).sort()).toEqual(
-      [
-        "exploded",
-        "hero-can",
-        "particles",
-        "picker",
-        "placeholder",
-        "pointer-field",
-        "splat-lounge",
-      ].sort()
-    );
+    for (const id of ids) {
+      const mod = await loadScene(id);
+      expect(typeof mod.init).toBe("function");
+      expect(typeof mod.update).toBe("function");
+      expect(typeof mod.dispose).toBe("function");
+    }
+
+    expect(Object.keys(sceneRegistry).sort()).toEqual([...ids].sort());
   });
 });

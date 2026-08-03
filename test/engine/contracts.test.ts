@@ -189,6 +189,8 @@ describe("worker/protocol packFrameState/unpackFrameState round-trip", () => {
     pointerY: -0.25,
     pointerVX: 0.03125,
     pointerVY: -0.0625,
+    pointerDown: true,
+    pointerInside: true,
   };
 
   it("round-trips with 0 views", () => {

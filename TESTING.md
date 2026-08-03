@@ -50,6 +50,20 @@ repo — it defaults to watch mode, which hangs in CI and agent sessions.
 - **`test/svg.test.tsx`** — `components/svg/{Leaf,Citrus,Berry}.tsx` render
   smoke tests with color-prop application.
 
+### Deep Wave engine tests (42 files)
+
+The `/deep-wave` engine ships its own suites, mirroring the source layout:
+`test/engine/core/` (scroll/ticker/rect/pointer/math — the pure core, both
+reduced-motion branches), `test/engine/gl/` (stage lifecycle and culling
+against a mock renderer, post, assets, raycast, gpgpu, timeline, noise),
+`test/engine/text/` (SDF atlas EDT math, bmfont parsing, layout engine,
+GlText), `test/engine/splats/` (format parsers, synthesis invariants, sort
+vs reference, covariance math, worker handshake), `test/engine/worker/`
+(protocol round-trips, both render hosts, HIT/INIT_FAILED paths),
+`test/engine/react/` (provider lifecycle, hooks), `test/scenes/` (one per
+scene), and `test/scripts/` (bundle-budget checker). GL visuals and scroll
+feel are browser-only — see the Playwright deferral in TODOS.md.
+
 ## Conventions
 
 - Tests live in `test/`, named `<subject>.test.ts` (data/logic) or

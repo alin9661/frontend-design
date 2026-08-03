@@ -1,7 +1,7 @@
 // lib/engine/gl/text/sdf-atlas.ts
 //
 // Runtime tiny-sdf atlas — the fallback text path (design doc §4C,
-// public/msdf/FALLBACK.md): the build-time msdfgen toolchain fails on this
+// docs/msdf-fallback.md): the build-time msdfgen toolchain fails on this
 // machine, so this is the mode that actually ships. Two layers:
 //
 //  1. Pure typed-array math (`squaredDistanceTransform`, `computeSDF`,

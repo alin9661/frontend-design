@@ -1,5 +1,49 @@
 # TODOS
 
+## Deep Wave (WebGL engine + /deep-wave route)
+
+### Picker hover selection
+**Priority:** P3
+`lib/scenes/picker/scene.ts` no longer registers its can groups as raycast
+targets (design review item D — registering cost a real per-frame raycast
+for zero payoff while selection flows entirely through DOM buttons +
+`invoke("select", [i])`). Wire `onPointer` + re-register the flavor cans as
+raycast targets when hover/click-driven selection is actually implemented.
+
+### Entrance choreography
+**Priority:** P2
+Loader-gated entrance reveals and scroll-linked per-section GL alpha fades
+(oryzo-style choreography). Deliberately deferred from the review fix pass —
+feature-shaped, touches Stage/scenes/provider, needs its own tests.
+
+### Visual taste iteration
+**Priority:** P3
+Splat lounge still reads abstract (tighten splat scale range / camera path);
+picker "Raspberry Yuzu" pill collides with a can at 1440px; GL echo headline
+partially hides behind the hero can. Pure art-direction iteration via
+screenshot loops.
+
+### Hot-path allocation pass
+**Priority:** P3
+Per-frame object churn in Stage/render.worker/host/EngineProvider tick
+(ViewContext, frame-state, pointer/scroll snapshots). Contained wins exist
+but touch both RenderHost implementations at once.
+
+### Upward hash-anchor from document end
+**Priority:** P3
+Repro: scroll pinned to the exact document bottom (scrollY == limit), then
+`location.hash = '#hero'` — the upward smooth animation is interrupted near
+its start and the page stays at the bottom. Downward anchors, `scrollBy`,
+keyboard scrolling, and wheel all work after the idle-write fix. Suspects:
+Next.js hashchange scroll handling racing the engine's divergence adoption,
+or a Chromium quirk animating from exactly document-end. No UI anchor links
+exist today, so user impact is nil.
+
+### Reduced-motion live toggle
+**Priority:** P3
+prefers-reduced-motion changes mid-session are only picked up on reload;
+forward matchMedia changes via SET_REDUCED_MOTION to the render host.
+
 ## Testing
 
 ### Playwright E2E suite for browser-only flows

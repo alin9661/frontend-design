@@ -389,15 +389,14 @@ describe("picker scene.ts — SceneModule contract, end to end", () => {
     scene.dispose();
   });
 
-  it("init() registers one interactive object per flavor (design doc §4A raycast registration)", async () => {
+  it("init() does NOT register any raycast targets (design review item D: dropped until hover-selection lands — selection flows through DOM buttons + invoke)", async () => {
     const scene = createPickerScene();
     const registered: THREE.Object3D[] = [];
     const ctx = makeViewContext({ registerInteractive: (objects) => registered.push(...objects) });
 
     await scene.init(ctx);
 
-    expect(registered).toHaveLength(flavors.length);
-    for (const obj of registered) expect(obj).toBeInstanceOf(THREE.Group);
+    expect(registered).toHaveLength(0);
 
     scene.dispose();
   });

@@ -39,7 +39,15 @@ import { ContextLossHandler, type ContextLossTarget } from "../gl/context-loss";
 import { runViewRaycasts, ViewRaycaster } from "../gl/raycast";
 import { createRenderer, setSize } from "../gl/renderer";
 import { Stage, type StageFrameInput } from "../gl/stage";
-import type { MainToWorker, QualityTier, RectData, SceneId, SceneModule, WorkerToMain } from "../types";
+import type { MainToWorker, PointerState, QualityTier, RectData, ScrollState, SceneId, SceneModule, WorkerToMain } from "../types";
+import {
+  DEFAULT_POINTER,
+  DEFAULT_SCROLL,
+  MAX_DT_S,
+  StatsReporter,
+  collectSceneStats,
+  frameStateToScrollPointer,
+} from "./frame-shared";
 import { unpackFrameState } from "./protocol";
 import { loadScene } from "./scene-registry";
 
@@ -60,16 +68,22 @@ interface WorkerScope {
 
 const ctx = self as unknown as WorkerScope;
 
-const STATS_INTERVAL_MS = 1000;
-const DEFAULT_SCROLL = { target: 0, current: 0, velocity: 0, progress: 0, limit: 0 };
-const DEFAULT_POINTER = { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false };
-
 let renderer: ReturnType<typeof createRenderer> | null = null;
 let stage: Stage | null = null;
 let assets: AssetManager | null = null;
 /** Stage exposes no per-view module getter (needed for SCENE_INVOKE
  * routing) — mirrors MainThreadHost's moduleByView map (host.ts). */
 const moduleByView = new Map<number, SceneModule>();
+/**
+ * Per-viewId generation counter — bumped on every VIEW_ADD/VIEW_REMOVE.
+ * `handleViewAdd`'s `loadScene()` is async; without this, a VIEW_REMOVE that
+ * lands while a scene is still loading left the eventual `.then()` free to
+ * resurrect the view, and a fast remove-then-re-add of the same viewId could
+ * race two in-flight loads into calling `Stage.addView` for the same id
+ * twice (design review item B — mirrors host.ts's identical
+ * `MainThreadHost.viewGeneration`).
+ */
+const viewGeneration = new Map<number, number>();
 /** Per-view raycaster state (hover-transition tracking), owned here and fed
  * to gl/raycast.ts's shared `runViewRaycasts()` each tick — see host.ts's
  * identical `MainThreadHost.raycasters` field. */
@@ -78,12 +92,16 @@ let contextLoss: ContextLossHandler | null = null;
 let quality: QualityTier = "high";
 let reducedMotion = false;
 let size = { width: 0, height: 0, dpr: 1 };
+/** Last-known scroll/pointer state, retained across RESIZE (F4 fix — mirrors
+ * host.ts's identical `MainThreadHost.lastScroll`/`lastPointer`: a resize
+ * must not snap scroll/pointer back to DEFAULTS before the next real
+ * FRAME_STATE tick). */
+let lastScroll: ScrollState = DEFAULT_SCROLL;
+let lastPointer: PointerState = DEFAULT_POINTER;
+const stats = new StatsReporter();
 
 let rafHandle: number | null = null;
 let lastTickTime = 0;
-let statsAccumMs = 0;
-let statsAccumFrames = 0;
-let lastStatsPostTime = 0;
 
 /** Only the newest FRAME_STATE buffer is kept — dropped once applied. */
 let pendingFrameState: Float32Array | null = null;
@@ -92,15 +110,23 @@ function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function currentFrameInput(scroll = DEFAULT_SCROLL, pointer = DEFAULT_POINTER): StageFrameInput {
+function currentFrameInput(): StageFrameInput {
   return {
-    scroll,
-    pointer,
+    scroll: lastScroll,
+    pointer: lastPointer,
     size,
     quality,
     reducedMotion,
     assets: assets ?? new AssetManager(),
   };
+}
+
+/** Invalidates any in-flight VIEW_ADD load for `viewId` and returns the new
+ * generation — see `viewGeneration`'s doc comment. */
+function bumpGeneration(viewId: number): number {
+  const next = (viewGeneration.get(viewId) ?? 0) + 1;
+  viewGeneration.set(viewId, next);
+  return next;
 }
 
 // --- message handling --------------------------------------------------------
@@ -121,6 +147,7 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
       handleViewAdd(msg.viewId, msg.sceneId, msg.rect);
       break;
     case "VIEW_REMOVE":
+      bumpGeneration(msg.viewId);
       stage?.removeView(msg.viewId);
       moduleByView.delete(msg.viewId);
       break;
@@ -139,7 +166,15 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
 function handleInit(canvas: OffscreenCanvas, dpr: number, initialQuality: QualityTier, initialReducedMotion: boolean): void {
   quality = initialQuality;
   reducedMotion = initialReducedMotion;
-  size = { width: canvas.width, height: canvas.height, dpr };
+  // F5 fix: `canvas.width`/`canvas.height` on a just-transferred
+  // OffscreenCanvas are its actual backing-store (device-pixel) dimensions,
+  // but every RESIZE message after this (worker/host.ts's
+  // `WorkerHost.resize()`) reports CSS px + a separate `dpr` multiplier —
+  // dividing by `dpr` here keeps `size`'s unit convention (CSS px + dpr)
+  // consistent from the very first frame instead of briefly holding
+  // device-px values in a CSS-px-shaped field until the RESIZE that always
+  // follows INIT arrives.
+  size = { width: canvas.width / dpr, height: canvas.height / dpr, dpr };
 
   // BUG B1 fix: renderer construction (real WebGL2 context creation) can
   // throw synchronously — e.g. headless/SwiftShader environments without
@@ -204,8 +239,19 @@ function handleResize(width: number, height: number, dpr: number): void {
 }
 
 function handleViewAdd(viewId: number, sceneId: SceneId, rect: RectData): void {
+  const generation = bumpGeneration(viewId);
   loadScene(sceneId)
     .then((module) => {
+      if (viewGeneration.get(viewId) !== generation) {
+        // Superseded by a VIEW_REMOVE/VIEW_ADD that happened while this
+        // scene was still loading — dispose the orphaned module instead of
+        // resurrecting a view nobody wants anymore, and don't touch
+        // Stage/moduleByView (which may already hold a NEWER load's result
+        // for this same viewId) — see `viewGeneration`'s doc comment
+        // (design review item B).
+        module.dispose();
+        return;
+      }
       moduleByView.set(viewId, module);
       stage?.addView(viewId, rect, module);
     })
@@ -225,12 +271,14 @@ function handleDispose(): void {
   renderer?.dispose();
   renderer = null;
   assets = null;
+  lastScroll = DEFAULT_SCROLL;
+  lastPointer = DEFAULT_POINTER;
 }
 
 function startTicking(): void {
   if (rafHandle != null) return;
   lastTickTime = now();
-  lastStatsPostTime = lastTickTime;
+  stats.reset(lastTickTime);
   rafHandle = ctx.requestAnimationFrame(tick);
 }
 
@@ -245,7 +293,7 @@ function tick(time: number): void {
   rafHandle = ctx.requestAnimationFrame(tick);
   if (!stage) return;
 
-  const dt = lastTickTime === 0 ? 0 : Math.min((time - lastTickTime) / 1000, 0.064);
+  const dt = lastTickTime === 0 ? 0 : Math.min((time - lastTickTime) / 1000, MAX_DT_S);
   lastTickTime = time;
 
   if (pendingFrameState) {
@@ -283,51 +331,19 @@ function tick(time: number): void {
 
 function applyFrameState(buf: Float32Array): void {
   const state = unpackFrameState(buf);
-  const scroll = {
-    target: state.scrollCurrent,
-    current: state.scrollCurrent,
-    velocity: state.scrollVelocity,
-    progress: state.scrollProgress,
-    limit: 0,
-  };
-  const pointer = {
-    x: state.pointerX,
-    y: state.pointerY,
-    vx: state.pointerVX,
-    vy: state.pointerVY,
-    down: false,
-    inside: true,
-  };
+  const { scroll, pointer } = frameStateToScrollPointer(state);
+  lastScroll = scroll;
+  lastPointer = pointer;
 
   for (const v of state.views) {
     stage?.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height });
   }
-  stage?.setFrame(currentFrameInput(scroll, pointer));
-}
-
-/**
- * Sums every registered view's SceneModule.getStats() (optional, additive —
- * see types.ts). Only splat-lounge implements it today, surfacing its
- * SplatMesh's real splat count/sortMs instead of the hardcoded 0/0 this
- * function replaces (see the gap documented in
- * components/deep-wave/SectionSplats.tsx).
- */
-function collectSceneStats(): { splats: number; sortMs: number } {
-  let splats = 0;
-  let sortMs = 0;
-  for (const module of moduleByView.values()) {
-    const s = module.getStats?.();
-    if (!s) continue;
-    splats += s.splats ?? 0;
-    sortMs = Math.max(sortMs, s.sortMs ?? 0);
-  }
-  return { splats, sortMs };
+  stage?.setFrame(currentFrameInput());
 }
 
 function postStats(time: number, renderMs: number): void {
-  statsAccumMs += renderMs;
-  statsAccumFrames += 1;
-  if (time - lastStatsPostTime < STATS_INTERVAL_MS) return;
+  const ms = stats.record(time, renderMs);
+  if (ms == null) return;
 
   // renderer.info is real THREE.WebGLRenderer draw-call bookkeeping —
   // gl/renderer.ts's createRenderer() sets `autoReset = false` and
@@ -336,16 +352,7 @@ function postStats(time: number, renderMs: number): void {
   // drawn this frame (previously this posted a hardcoded 0, so the ?debug
   // HUD's "draw calls" row could never show real activity).
   const drawCalls = renderer?.info?.render.calls ?? 0;
-  const { splats, sortMs } = collectSceneStats();
+  const { splats, sortMs } = collectSceneStats(moduleByView.values());
 
-  ctx.postMessage({
-    type: "STATS",
-    ms: statsAccumFrames > 0 ? statsAccumMs / statsAccumFrames : 0,
-    drawCalls,
-    splats,
-    sortMs,
-  });
-  statsAccumMs = 0;
-  statsAccumFrames = 0;
-  lastStatsPostTime = time;
+  ctx.postMessage({ type: "STATS", ms, drawCalls, splats, sortMs });
 }

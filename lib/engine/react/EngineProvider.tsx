@@ -194,6 +194,11 @@ export default function EngineProvider({ children }: EngineProviderProps) {
           pointerY: pointerState.y,
           pointerVX: pointerState.vx,
           pointerVY: pointerState.vy,
+          // Real PointerTracker state (design review item A) — both
+          // RenderHost implementations previously hardcoded
+          // `down: false, inside: true` instead of reading this.
+          pointerDown: pointerState.down,
+          pointerInside: pointerState.inside,
         },
         views
       );

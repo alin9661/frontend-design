@@ -6,7 +6,7 @@
 //
 // loadFont() tries the build-time MSDF atlas first
 // (fetch("/msdf/anton.json" + ".png")); msdfgen failed on this machine
-// (public/msdf/FALLBACK.md), so in practice every caller gets `mode: "sdf"`
+// (docs/msdf-fallback.md), so in practice every caller gets `mode: "sdf"`
 // via sdf-atlas.ts's runtime tiny-sdf generator today. Both paths produce
 // the same FontHandle shape so MsdfText.ts (GlText) never branches on how
 // the font was built past its ShaderMaterial's `mode` #define.
@@ -60,7 +60,7 @@ async function loadFontImpl(): Promise<FontHandle> {
   try {
     return await loadMsdfFont();
   } catch {
-    // Expected on this machine — see public/msdf/FALLBACK.md.
+    // Expected on this machine — see docs/msdf-fallback.md.
     return loadSdfFont();
   }
 }

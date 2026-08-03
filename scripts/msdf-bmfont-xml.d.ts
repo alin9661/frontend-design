@@ -9,6 +9,7 @@ declare module "msdf-bmfont-xml" {
     fieldType?: "msdf" | "sdf" | "psdf" | "sdf-consistent";
     outputType?: "json" | "xml";
     smartSize?: boolean;
+    filename?: string;
   }
 
   interface GenerateBMFontTexture {

@@ -142,6 +142,7 @@ const CURL_SCALE = 0.012;
 const BASE_POINT_SIZE = 8; // px at dpr 1, before "sized by DPR"
 const TITLE_TEXT = "ENERGY, RENDERED";
 const TITLE_FONT_SIZE = 42;
+const TITLE_OPACITY = 0.55; // caption strength — the DOM <h2> owns the words
 const FOREST_HEX = 0x1d423c;
 /** Shifts the particle column (not the section title, which stays over the
  * DOM headline it echoes) right of the copy/stats column — confirmed
@@ -288,8 +289,18 @@ class ParticlesScene implements SceneModule {
       color: FOREST_HEX,
       align: "center",
       glow: 0.4,
+      opacity: TITLE_OPACITY,
     });
-    this.text.object3d.position.set(0, riseHeight * 0.55 + TITLE_FONT_SIZE, 0);
+    // Caption the plume, don't duplicate the headline (design-review F-001):
+    // this used to sit at x=0 — the view's center — which planted it on top
+    // of SectionParticles' DOM <h2> in the left copy column. It now rides
+    // the emitter column (same X offset as the points cloud) as a softened
+    // caption above the plume crest.
+    this.text.object3d.position.set(
+      ctx.rect.width * EMITTER_X_OFFSET_FACTOR,
+      riseHeight * 0.55 + TITLE_FONT_SIZE,
+      0
+    );
     ctx.scene.add(this.text.object3d);
   }
 

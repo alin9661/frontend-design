@@ -49,15 +49,22 @@ const CAN_X_OFFSET_FACTOR = 0.28; // × ctx.rect.width (CSS px == world units at
 const CAN_SCALE_FACTOR = 1.6;
 
 const HEADLINE_LINES = ["SMOOTH LIFT.", "ZERO CRASH."] as const;
-const HEADLINE_FONT_SIZE = 64; // px (world units)
-// brand.forest (dark green) — was brand.cream (0xf9f9ee), which is
-// invisible against SectionHero.tsx's cream (`bg-cream`) background (a
-// confirmed `/deep-wave` design-review finding: cream-on-cream GL headline
-// text). The DOM <h1> stays the always-visible a11y/content source of
-// truth (see the file header); this GL layer is purely a bloom/glow accent
-// on top of the can, so it needs to actually read against the page bg.
+// Watermark treatment (design-review F-001): the GL headline used to render
+// at fontSize 64 with its baseline INSIDE the can silhouette (z ≈
+// bodyRadius·0.05), so the can occluded the middle of every glyph and the
+// fragments poking out around the rim read as a z-fighting bug — while the
+// DOM <h1> carried the same words at full strength on the left. The GL
+// layer is now an intentional BACKDROP: oversized, low-opacity, pushed well
+// behind the can (same pattern as the landing page's giant flavor-name
+// watermark behind its can). The DOM <h1> stays the sole full-strength
+// headline; this layer is texture, not copy.
+const HEADLINE_FONT_SIZE = 150; // px (world units)
 const HEADLINE_COLOR = 0x1d423c; // brand.forest (lib/flavors.ts's `brand.forest`)
-const HEADLINE_GLOW = 1.4;
+const HEADLINE_GLOW = 0.25;
+const HEADLINE_OPACITY = 0.14;
+/** World-z of the watermark plane — comfortably behind the can body
+ * (radius 82 × CAN_SCALE_FACTOR 1.6 ≈ 131) so no glyph ever intersects it. */
+const HEADLINE_Z = -320;
 
 interface SpringState {
   pos: number;
@@ -85,6 +92,7 @@ interface TextModuleShape {
       maxWidth?: number;
       letterSpacing?: number;
       glow?: number;
+      opacity?: number;
     }
   ) => {
     object3d: THREE.Object3D;
@@ -292,13 +300,13 @@ class HeroCanScene implements SceneModule {
       const layout = getCanLayout();
       const headlineGroup = new THREE.Group();
       // x follows the can's own composition offset (this.group.position.x,
-      // set in init()) — this GL layer is a glow accent ON the can, not an
-      // independent element, so it needs to move with it now that the can
-      // is no longer dead-center.
+      // set in init()) so the watermark stays visually paired with the
+      // product; z pushes the whole plane behind the can (see HEADLINE_Z)
+      // and y centers the two-line block on the can's vertical middle.
       headlineGroup.position.set(
         ctx.rect.width * CAN_X_OFFSET_FACTOR,
-        layout.topOpeningY + layout.height * 0.18,
-        layout.bodyRadius * 0.05
+        layout.height * 0.5 * 0.4,
+        HEADLINE_Z
       );
 
       let cursorY = 0;
@@ -310,6 +318,7 @@ class HeroCanScene implements SceneModule {
           color: HEADLINE_COLOR,
           align: "center",
           glow: HEADLINE_GLOW,
+          opacity: HEADLINE_OPACITY,
         });
         glText.object3d.position.y = cursorY;
         cursorY -= glText.height * 1.15;

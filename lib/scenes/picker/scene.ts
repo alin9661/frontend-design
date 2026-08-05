@@ -31,8 +31,11 @@ const FLAVOR_NAME_FONT_SIZE = 36;
  * lit-material cans (buildCan) actually read instead of rendering as solid
  * black silhouettes (a confirmed design-review bug: this scene never lit
  * its cans at all). */
-const AMBIENT_INTENSITY = 0.65;
-const KEY_LIGHT_INTENSITY = 1.4;
+// Raised from 0.65/1.4 (design-review F-005): at those levels the standard-
+// material cans read olive/brown — the label colors never reached their
+// authored values against the bright flavor background.
+const AMBIENT_INTENSITY = 0.95;
+const KEY_LIGHT_INTENSITY = 1.8;
 /** Fraction of the view's CSS width the carousel settles right-of-center
  * (composition fix — see `ringGroup`'s doc comment on the class below).
  * 0.3, not the design-review finding's literal 0.22, after visually
@@ -166,7 +169,16 @@ class PickerScene implements SceneModule {
         this.lastTextedIndex = this.carousel.selectedIndex;
         // Child of `root` (never rotates), NOT `ringGroup` — the flavor
         // name must stay screen-facing regardless of carousel rotation.
-        this.flavorText.object3d.position.set(0, -160, 40);
+        // Nameplate placement (design-review F-001): parked under the
+        // carousel column (same x offset as ringGroup), below the settled
+        // can's bottom rim (can height 480, center y=0 → bottom -240) —
+        // it used to float at view center where it duplicated the DOM
+        // flavor heading in the copy column.
+        this.flavorText.object3d.position.set(
+          ctx.rect.width * RING_X_OFFSET_FACTOR,
+          -300,
+          40
+        );
         this.root?.add(this.flavorText.object3d);
         this.disposeBag.add(() => this.flavorText?.dispose());
       })

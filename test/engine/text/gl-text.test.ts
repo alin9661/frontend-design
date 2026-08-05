@@ -63,6 +63,22 @@ describe("GlText", () => {
     expect((material.uniforms.uColor!.value as THREE.Color).getHex()).toBe(0xff00ff);
   });
 
+  it("applies the opacity option to uOpacity (default 1)", () => {
+    const watermark = new GlText(fixtureFont(), { text: "A", fontSize: 10, opacity: 0.14 });
+    const headline = new GlText(fixtureFont(), { text: "A", fontSize: 10 });
+    const watermarkMaterial = meshOf(watermark).material as THREE.ShaderMaterial;
+    const headlineMaterial = meshOf(headline).material as THREE.ShaderMaterial;
+    expect(watermarkMaterial.uniforms.uOpacity!.value).toBeCloseTo(0.14);
+    expect(headlineMaterial.uniforms.uOpacity!.value).toBe(1);
+  });
+
+  it("setOpacity updates the shared material's uOpacity uniform", () => {
+    const glText = new GlText(fixtureFont(), { text: "A", fontSize: 10, opacity: 0.5 });
+    const material = meshOf(glText).material as THREE.ShaderMaterial;
+    glText.setOpacity(0.9);
+    expect(material.uniforms.uOpacity!.value).toBeCloseTo(0.9);
+  });
+
   it("setText rebuilds the InstancedMesh (new geometry, updated count) and disposes the old geometry", () => {
     const glText = new GlText(fixtureFont(), { text: "A", fontSize: 10 });
     const firstMesh = meshOf(glText);

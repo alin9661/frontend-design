@@ -10,6 +10,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EngineContext, type EngineContextValue } from "@/lib/engine/react/engine-context";
 import LoadingScreen from "@/components/deep-wave/LoadingScreen";
+import { EASE_OUT, PROGRESS_TRANSITION_CSS } from "@/lib/motion";
 import { setReducedMotion } from "./setup";
 
 function makeEngine(overrides: Partial<EngineContextValue> = {}): EngineContextValue {
@@ -54,7 +55,22 @@ describe("LoadingScreen — progress bar fill (P1: transform scaleX, not width)"
     const { container } = renderWithEngine(makeEngine({ progress: 10 }));
     const fill = getFillEl(container);
 
-    expect(fill.style.transition).toBe("transform 200ms ease-out");
+    expect(fill.style.transition).toBe(PROGRESS_TRANSITION_CSS);
+  });
+
+  it("takes its transition from the shared motion tokens, not an inline curve", () => {
+    // The bar animates via a raw style.transition (compositor-only transform
+    // on a plain <div>, where framer-motion would add nothing), which is
+    // exactly the case that can silently drift away from the shared easing.
+    // Pinning it to the token — and pinning the token to EASE_OUT — means a
+    // retune of the site's curve reaches the loading bar too. Pre-fix this
+    // read a hardcoded "ease-out", framer's flatter built-in, not EASE_OUT.
+    const { container } = renderWithEngine(makeEngine({ progress: 10 }));
+    const fill = getFillEl(container);
+
+    expect(PROGRESS_TRANSITION_CSS).toContain(`cubic-bezier(${EASE_OUT.join(",")})`);
+    expect(fill.style.transition).toContain("transform");
+    expect(fill.style.transition).not.toContain("ease-out");
   });
 
   it("A1 regression: disables the raw CSS transition under reduced motion", () => {

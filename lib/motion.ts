@@ -30,3 +30,15 @@ export const CTA_SPRING = { type: "spring", stiffness: 400, damping: 25 } as con
 /** Spring used for the product (can) entrance — same shape as CTA_SPRING's
  * category but tuned softer for a larger, slower-settling element. */
 export const CAN_SPRING = { type: "spring", stiffness: 260, damping: 26 } as const;
+
+/** CSS-string form of the shared easing, for the rare places that animate via
+ * a raw `style.transition` rather than framer-motion (a compositor-only
+ * transform on a plain element, where framer would add no value). Derived from
+ * EASE_OUT so the two can never drift. */
+export const EASE_OUT_CSS = `cubic-bezier(${EASE_OUT.join(",")})`;
+
+/** Progress-bar fill transition. Short — a progress bar that eases slowly
+ * reads as lag rather than polish. Callers must still gate this on
+ * reduced motion themselves: a raw CSS transition is invisible to
+ * <MotionConfig reducedMotion="user">. */
+export const PROGRESS_TRANSITION_CSS = `transform 200ms ${EASE_OUT_CSS}`;

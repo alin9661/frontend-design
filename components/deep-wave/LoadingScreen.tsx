@@ -14,7 +14,7 @@
 import { useEffect } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEngine } from "@/lib/engine/react/useEngine";
-import { SWAP } from "@/lib/motion";
+import { PROGRESS_TRANSITION_CSS, SWAP } from "@/lib/motion";
 
 export default function LoadingScreen() {
   const { status, progress } = useEngine();
@@ -68,7 +68,7 @@ export default function LoadingScreen() {
                 // reducedMotion="user">` (app/providers.tsx) can't suppress
                 // it — it must gate on `reduceMotion` itself, same as the
                 // exit fade above.
-                transition: reduceMotion ? "none" : "transform 200ms ease-out",
+                transition: reduceMotion ? "none" : PROGRESS_TRANSITION_CSS,
               }}
             />
           </div>

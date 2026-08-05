@@ -1,6 +1,7 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { useRef } from "react";
+import { motion, useInView } from "framer-motion";
 import Leaf from "@/components/svg/Leaf";
 import Citrus from "@/components/svg/Citrus";
 import Berry from "@/components/svg/Berry";
@@ -56,21 +57,29 @@ const item = {
 };
 
 export default function Benefits() {
+  const sectionRef = useRef<HTMLElement>(null);
+  // A4 fix: gates the three infinite decorative bobs so they don't keep
+  // running for the whole page lifetime while scrolled far offscreen
+  // (framer-motion does not pause offscreen animations on its own).
+  // `initial: true` assumes visible until the (real) IntersectionObserver
+  // says otherwise. Unlike the pre-fix `animate={isInView ? {...} :
+  // undefined}`, the out-of-view target below is an explicit REST pose
+  // (`y: 0, rotate: 0`), not `undefined` — `undefined` froze the bob at
+  // whatever position it happened to be mid-air when it left the viewport
+  // and snapped back on re-entry; animating to rest eases home instead.
+  const isInView = useInView(sectionRef, { amount: 0.2, initial: true });
+
   return (
     <section
+      ref={sectionRef}
       id="benefits"
       className="relative overflow-hidden bg-forest py-32 text-cream"
     >
-      {/* decorative floating leaves. These always run — they're a cheap
-          composited transform, so there's no need to gate them on
-          scroll-into-view: gating them caused the bob to freeze mid-air when
-          scrolled offscreen and snap on re-entry. The section itself only
-          being on/off-screen is enough to make them invisible when it
-          matters. */}
+      {/* decorative floating leaves */}
       <motion.div
         className="pointer-events-none absolute -left-8 top-16 w-24 opacity-10 sm:w-32"
         aria-hidden="true"
-        animate={{ y: [0, -14, 0], rotate: [0, 6, 0] }}
+        animate={isInView ? { y: [0, -14, 0], rotate: [0, 6, 0] } : { y: 0, rotate: 0 }}
         transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
       >
         <Leaf color={brand.cream} />
@@ -78,7 +87,7 @@ export default function Benefits() {
       <motion.div
         className="pointer-events-none absolute right-4 top-1/3 w-16 opacity-10 sm:w-24"
         aria-hidden="true"
-        animate={{ y: [0, 16, 0], rotate: [0, -8, 0] }}
+        animate={isInView ? { y: [0, 16, 0], rotate: [0, -8, 0] } : { y: 0, rotate: 0 }}
         transition={{ duration: 8.5, repeat: Infinity, ease: "easeInOut", delay: 0.6 }}
       >
         <Leaf color={brand.cream} />
@@ -86,7 +95,7 @@ export default function Benefits() {
       <motion.div
         className="pointer-events-none absolute bottom-10 left-1/4 w-14 opacity-10 sm:w-20"
         aria-hidden="true"
-        animate={{ y: [0, -10, 0], rotate: [0, 5, 0] }}
+        animate={isInView ? { y: [0, -10, 0], rotate: [0, 5, 0] } : { y: 0, rotate: 0 }}
         transition={{ duration: 6.5, repeat: Infinity, ease: "easeInOut", delay: 1.2 }}
       >
         <Leaf color={brand.cream} />

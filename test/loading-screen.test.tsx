@@ -10,6 +10,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EngineContext, type EngineContextValue } from "@/lib/engine/react/engine-context";
 import LoadingScreen from "@/components/deep-wave/LoadingScreen";
+import { setReducedMotion } from "./setup";
 
 function makeEngine(overrides: Partial<EngineContextValue> = {}): EngineContextValue {
   return {
@@ -54,6 +55,21 @@ describe("LoadingScreen — progress bar fill (P1: transform scaleX, not width)"
     const fill = getFillEl(container);
 
     expect(fill.style.transition).toBe("transform 200ms ease-out");
+  });
+
+  it("A1 regression: disables the raw CSS transition under reduced motion", () => {
+    // A1: this is a plain inline style on a `<div>`, not a framer-motion
+    // animation, so `<MotionConfig reducedMotion="user">` (which only
+    // governs framer-motion) can't suppress it on its own — it must gate on
+    // `reduceMotion` explicitly, the way the exit fade a few lines below
+    // already does. Pre-fix, this assertion would fail: the transition was
+    // unconditionally "transform 200ms ease-out" regardless of
+    // useReducedMotion()'s value.
+    setReducedMotion(true);
+    const { container } = renderWithEngine(makeEngine({ progress: 10 }));
+    const fill = getFillEl(container);
+
+    expect(fill.style.transition).toBe("none");
   });
 
   it("keeps the fill's own transform-origin at the left so it scales outward from the start", () => {

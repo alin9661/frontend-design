@@ -48,11 +48,13 @@ export default function FloatingItem({
   // Desync each item's idle bob so the page reads alive, not synchronized:
   // same-depth items previously shared an identical duration (depth-only),
   // so they bobbed in perfect lockstep. Hashing the x/y position props gives
-  // each instance its own duration (5-9s) and a small negative start delay
-  // (0 to -3s) so no two items — even at the same depth — move in sync.
+  // each instance its own duration (5-9s) and a small positive start delay
+  // (0 to 3s) so no two items — even at the same depth — move in sync. A
+  // negative delay would make the animation start mid-keyframe on mount,
+  // which is exactly the jump this component needs to avoid.
   const hash = hashString(`${x}${y}`);
   const duration = BOB_BASE_S + (hash % 400) / 100;
-  const delay = -((hash % 300) / 100);
+  const delay = (hash % 300) / 100;
 
   return (
     <motion.div
@@ -72,8 +74,8 @@ export default function FloatingItem({
           prefersReducedMotion
             ? undefined
             : {
-                y: [-12, 12],
-                rotate: [-5, 5],
+                y: [0, -12, 0, 12, 0],
+                rotate: [0, -5, 0, 5, 0],
               }
         }
         transition={
@@ -84,7 +86,6 @@ export default function FloatingItem({
                 delay,
                 ease: "easeInOut",
                 repeat: Infinity,
-                repeatType: "mirror",
               }
         }
       >

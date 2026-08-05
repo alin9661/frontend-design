@@ -6,14 +6,21 @@
 // BG_LAMBDA=6 damp — it didn't; that damp settles ~500ms in. Fixed to
 // `450ms cubic-bezier(0.33, 1, 0.68, 1)`, applied consistently to both the
 // section root's ink color and the sub-copy's muted ink color.
+//
+// D3 fix: `INK_TRANSITION` was re-declared inside the component body (a
+// fresh string every render) and hardcoded that one-off 450ms/cubic-bezier
+// pair. Hoisted to module scope and derived from the shared `SWAP`/
+// `EASE_OUT` tokens (lib/motion.ts) instead: `SWAP.duration` (500ms) lands
+// even closer to the GL background's ~500ms settle point than 450ms did.
 
 import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EngineContext, type EngineContextValue } from "@/lib/engine/react/engine-context";
 import { flavors } from "@/lib/flavors";
+import { EASE_OUT, SWAP } from "@/lib/motion";
 import SectionPicker from "@/components/deep-wave/SectionPicker";
 
-const EXPECTED_TRANSITION = "color 450ms cubic-bezier(0.33, 1, 0.68, 1)";
+const EXPECTED_TRANSITION = `color ${SWAP.duration * 1000}ms cubic-bezier(${EASE_OUT.join(",")})`;
 
 /** jsdom normalizes an inline `color: "#rrggbb"` style to `rgb(r, g, b)` on
  * readback — convert a flavor's hex ink token the same way for comparison. */
@@ -47,8 +54,8 @@ function renderPicker() {
   );
 }
 
-describe("SectionPicker — ink color transition (P2: matches the GL bg's settle time)", () => {
-  it("sets the new 450ms cubic-bezier transition on the section root's ink color", () => {
+describe("SectionPicker — ink color transition (P2: matches the GL bg's settle time; D3: token-derived)", () => {
+  it("sets the shared-token-derived transition on the section root's ink color", () => {
     const { container } = renderPicker();
     const section = container.querySelector("#picker") as HTMLElement;
     expect(section.style.transition).toBe(EXPECTED_TRANSITION);

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useInView, useReducedMotion } from "framer-motion";
 import Can from "@/components/svg/Can";
 import { flavors } from "@/lib/flavors";
-import { EASE_OUT, REVEAL, SWAP } from "@/lib/motion";
+import { CAN_SPRING, REVEAL, SWAP, SWAP_FAST } from "@/lib/motion";
 
 const AUTO_ADVANCE_MS = 4000;
 
@@ -115,7 +115,7 @@ export default function FlavorShowcase() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 0.2 }}
             exit={{ opacity: 0 }}
-            transition={{ ...SWAP, duration: prefersReducedMotion ? 0.3 : SWAP.duration }}
+            transition={prefersReducedMotion ? SWAP_FAST : SWAP}
             style={{ color: active.ink }}
             className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 select-none text-center font-display text-[clamp(3rem,10vw,9rem)] uppercase leading-[0.9]"
           >
@@ -143,17 +143,17 @@ export default function FlavorShowcase() {
                       y: 0,
                       opacity: 1,
                       rotate: 0,
-                      transition: { type: "spring", stiffness: 260, damping: 26 },
+                      transition: CAN_SPRING,
                     }
               }
               exit={
                 prefersReducedMotion
-                  ? { opacity: 0, transition: { duration: 0.3 } }
+                  ? { opacity: 0, transition: SWAP_FAST }
                   : {
                       y: -40,
                       opacity: 0,
                       rotate: 6,
-                      transition: { duration: 0.3, ease: EASE_OUT },
+                      transition: SWAP_FAST,
                     }
               }
               className="absolute inset-0 flex items-center justify-center drop-shadow-2xl"
@@ -195,7 +195,7 @@ export default function FlavorShowcase() {
               aria-label={flavor.name}
               aria-pressed={isActive}
               onClick={() => selectFlavor(index)}
-              className="group relative flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-300 hover:scale-110"
+              className="group relative flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 ease-out hover:scale-110"
             >
               <span
                 className="block h-7 w-7 rounded-full transition-[box-shadow] duration-200 ease-out"

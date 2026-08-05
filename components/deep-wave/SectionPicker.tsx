@@ -19,6 +19,19 @@ import { motion, useReducedMotion } from "framer-motion";
 import { flavors } from "@/lib/flavors";
 import { useView } from "@/lib/engine/react/useView";
 import { useEngine } from "@/lib/engine/react/useEngine";
+import { EASE_OUT, SWAP, SWAP_FAST } from "@/lib/motion";
+
+// Motion-audit fix P2: this used to claim `color 300ms ease` "matches" the
+// GL background's crossfade — it didn't. carousel.ts's `BG_LAMBDA` (6) damp
+// is exponential: it reaches ~95% of the way to its target at
+// t = -ln(0.05)/6 ≈ 0.4995s, i.e. ~500ms. D3 fix: hoisted out of the
+// component body (was re-allocated as a fresh string every render) and
+// derived from the shared `SWAP`/`EASE_OUT` tokens instead of a one-off
+// `450ms cubic-bezier(0.33, 1, 0.68, 1)` — SWAP's 500ms duration lands
+// CLOSER to that ~500ms GL settle point than 450ms did, and EASE_OUT's
+// decelerating curve still approximates the same "fast start, slow finish"
+// feel as the exponential damp.
+const INK_TRANSITION = `color ${SWAP.duration * 1000}ms cubic-bezier(${EASE_OUT.join(",")})`;
 
 export default function SectionPicker() {
   const [selectedId, setSelectedId] = useState(flavors[0]!.id);
@@ -40,21 +53,8 @@ export default function SectionPicker() {
   // copy was hardcoded cream, which is illegible (~1.4:1) against the
   // lighter flavor backgrounds (lemon/peach/mango) once the GL bg crossfades
   // to them, and only happened to work for the two dark flavors (mint,
-  // raspberry).
-  //
-  // Motion-audit fix P2: the transition below used to be `color 300ms ease`,
-  // which this comment claimed "matches" the GL background's crossfade —
-  // it didn't. carousel.ts's `BG_LAMBDA` (6) damp is exponential: it reaches
-  // ~95% of the way to its target at t = -ln(0.05)/6 ≈ 0.4995s, i.e. ~500ms,
-  // roughly 200ms AFTER the old 300ms CSS transition had already finished.
-  // A linear/ease CSS transition can't reproduce an exponential decay curve
-  // exactly, but `450ms cubic-bezier(0.33, 1, 0.68, 1)` ("ease-out-cubic")
-  // gets close: its duration lands much nearer the GL layer's ~500ms
-  // settle point, and its decelerating curve shape approximates the same
-  // "fast start, slow finish" feel as the exponential damp, instead of a
-  // linear/ease curve that visibly finishes early and then just sits there
-  // waiting for the GL background to catch up.
-  const INK_TRANSITION = "color 450ms cubic-bezier(0.33, 1, 0.68, 1)";
+  // raspberry). See `INK_TRANSITION` (module scope, above) for the
+  // color-transition timing this drives.
   const inkMuted = `${selected.ink}cc`; // ~80% opacity (0xcc / 255 ≈ 0.8), matching the old `/80` utility
 
   return (
@@ -122,7 +122,7 @@ export default function SectionPicker() {
             key={selected.id}
             initial={reduceMotion ? undefined : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, ease: "easeOut" }}
+            transition={SWAP_FAST}
           >
             <p className="font-display uppercase text-2xl">{selected.name}</p>
             <p className="mt-2 max-w-md font-body" style={{ color: inkMuted }}>

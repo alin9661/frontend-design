@@ -16,6 +16,7 @@
 import * as THREE from "three";
 import type { SceneModule, ViewContext } from "@/lib/engine/types";
 import { flavorById } from "@/lib/flavors";
+import { clamp, easeOutExpo } from "@/lib/engine/core/math";
 import { springStep } from "@/lib/engine/core/pointer";
 import { buildCan, getCanLayout, type BuiltCan } from "./can-geometry";
 import { createLabelTexture } from "./label-texture";
@@ -24,9 +25,15 @@ const HERO_FLAVOR = flavorById("mint");
 
 const IDLE_SPIN_SPEED = 0.18; // rad/s
 const TILT_MAX = 0.22; // rad
-const TILT_STIFFNESS = 60;
-const TILT_DAMPING = 14;
-/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over scroll progress 0..1. */
+// Motion-audit fix N5: pointer tilt used to double-smooth (PointerTracker's
+// own ~100ms damp on top of this scene's own ~250ms spring), reading as
+// ~350ms of mushy lag between moving the pointer and the can visibly
+// responding. Stiffened to ζ≈0.85 (still slightly underdamped, so the
+// motion keeps a touch of life instead of feeling clamped) for a much
+// tighter, single perceptible smoothing stage.
+const TILT_STIFFNESS = 140;
+const TILT_DAMPING = 20;
+/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over the hero's OWN view-progress span. */
 const SCROLL_CAMERA_PULL = 220;
 const AMBIENT_INTENSITY = 0.65;
 const KEY_LIGHT_INTENSITY = 1.4;
@@ -112,6 +119,18 @@ class HeroCanScene implements SceneModule {
   private tiltX: SpringState = { pos: 0, vel: 0 };
   private tiltZ: SpringState = { pos: 0, vel: 0 };
   private spinAngle = 0;
+  /**
+   * Motion-audit fix C2: per-VIEW progress (0..1 across just this section's
+   * own scroll span), fed by `onProgress()` — the SceneModule contract's
+   * scrubbable-progress hook (see ../../engine/types.ts), same as every
+   * other scene in this codebase. Previously `update()` read
+   * `ctx.scroll.progress`, the GLOBAL document scroll fraction — but the
+   * hero section is culled from view (and its rect.progress() pegged at 1)
+   * after only ~1/6 of the full page's scroll, so the document-wide
+   * progress never got anywhere near far enough for the designed 220px pull
+   * to actually land while the hero was visible.
+   */
+  private viewProgress = 0;
 
   init(ctx: ViewContext): void {
     // Re-runnable: tear down any previous build first (context-loss restore
@@ -133,9 +152,15 @@ class HeroCanScene implements SceneModule {
     this.tiltX = { pos: 0, vel: 0 };
     this.tiltZ = { pos: 0, vel: 0 };
     this.spinAngle = 0;
+    this.viewProgress = 0;
 
     this.loadToken += 1;
     void this.loadHeadlineText(ctx, this.loadToken);
+  }
+
+  /** SceneModule contract (see ../../engine/types.ts): per-view scrub progress. */
+  onProgress(p: number): void {
+    this.viewProgress = p;
   }
 
   update(dt: number, ctx: ViewContext): void {
@@ -146,7 +171,14 @@ class HeroCanScene implements SceneModule {
     // the current hosts (worker/host.ts, worker/render.worker.ts) only call
     // Stage.update() at all when !reducedMotion, so under reduced motion
     // this line simply doesn't run either — see the workstream report.
-    ctx.camera.position.z = this.baseCameraZ + ctx.scroll.progress * SCROLL_CAMERA_PULL;
+    //
+    // The hero starts at scroll 0, so its readable beat is the FIRST HALF of
+    // its own view-progress span (`p * 2`, clamped 0..1 so the back half
+    // just holds at the fully-pulled-back position instead of continuing to
+    // push the camera further). easeOutExpo front-loads the pull so it reads
+    // as a quick, decisive push rather than a linear drift.
+    const pull = easeOutExpo(clamp(this.viewProgress * 2, 0, 1));
+    ctx.camera.position.z = this.baseCameraZ + pull * SCROLL_CAMERA_PULL;
 
     if (ctx.reducedMotion) {
       // Static frame: no idle spin, no pointer tilt (§6 a11y).

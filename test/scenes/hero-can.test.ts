@@ -23,6 +23,15 @@ import {
 } from "@/lib/scenes/hero-can/can-geometry";
 import { createLabelTexture } from "@/lib/scenes/hero-can/label-texture";
 import createHeroCanScene from "@/lib/scenes/hero-can/scene";
+import { clamp, easeOutExpo } from "@/lib/engine/core/math";
+
+/** Mirrors scene.ts's C2 camera-pull formula exactly, so these tests assert
+ * the real eased/windowed shape instead of duplicating a weakened linear
+ * approximation of it. */
+const SCROLL_CAMERA_PULL = 220;
+function expectedCameraPull(viewProgress: number): number {
+  return easeOutExpo(clamp(viewProgress * 2, 0, 1)) * SCROLL_CAMERA_PULL;
+}
 
 const MINT = flavorById("mint");
 
@@ -393,14 +402,14 @@ describe("hero-can scene — update: idle spin + pointer tilt + scroll camera pu
     scene.dispose();
   });
 
-  it("reduced motion: no idle spin, no pointer tilt (static frame), but scroll still pulls the camera", () => {
+  it("reduced motion: no idle spin, no pointer tilt (static frame), but per-view progress still pulls the camera", () => {
     const scene = createHeroCanScene();
     const ctx = makeCtx({
       reducedMotion: true,
       pointer: { x: 1, y: 1, vx: 0, vy: 0, down: false, inside: true },
-      scroll: { target: 0, current: 0, velocity: 0, progress: 0.5, limit: 1000 },
     });
     scene.init(ctx);
+    scene.onProgress?.(0.5);
     const group = ctx.scene.children.find((o) => o instanceof THREE.Group) as THREE.Group;
     const baseZ = ctx.camera.position.z;
 
@@ -410,24 +419,62 @@ describe("hero-can scene — update: idle spin + pointer tilt + scroll camera pu
     expect(group.rotation.y).toBe(0);
     expect(group.rotation.x).toBe(0);
     expect(group.rotation.z).toBe(0);
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ + 0.5 * 220, 5);
+    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.5), 5);
 
     scene.dispose();
   });
 
-  it("scroll progress pulls the camera back proportionally (camera.position.z += p * k)", () => {
+  it("BUG C2 regression: camera pull is driven by onProgress()'s per-view progress, NOT ctx.scroll.progress (the global document fraction)", () => {
+    // Before the fix, `update()` read `ctx.scroll.progress` directly. The
+    // hero view is culled from view (and its OWN progress pegged near 1)
+    // after roughly 1/6 of the full page's scroll, so a global progress
+    // this small (0.05) would never move the camera at all under the old
+    // code even though the hero's own span is nearly halfway done.
+    const scene = createHeroCanScene();
+    const ctx = makeCtx({ scroll: { target: 0, current: 0, velocity: 0, progress: 0.05, limit: 1000 } });
+    scene.init(ctx);
+    const baseZ = ctx.camera.position.z;
+
+    scene.onProgress?.(0.5); // this view's own progress, independent of ctx.scroll.progress
+    scene.update(1 / 60, ctx);
+
+    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.5), 5);
+    expect(ctx.camera.position.z).not.toBeCloseTo(baseZ + ctx.scroll.progress * 220, 2);
+
+    scene.dispose();
+  });
+
+  it("per-view progress pulls the camera back, eased (easeOutExpo) over just the FIRST HALF of this view's own span", () => {
     const scene = createHeroCanScene();
     const ctx = makeCtx();
     scene.init(ctx);
     const baseZ = ctx.camera.position.z;
 
-    ctx.scroll = { target: 0, current: 0, velocity: 0, progress: 0, limit: 1000 };
+    scene.onProgress?.(0);
     scene.update(1 / 60, ctx);
     expect(ctx.camera.position.z).toBeCloseTo(baseZ, 5);
 
-    ctx.scroll = { target: 0, current: 0, velocity: 0, progress: 1, limit: 1000 };
+    // Halfway through the view's own span: already fully pulled back
+    // (p*2 clamps to 1) — the hero starts at scroll 0, so its readable
+    // camera-pull beat has to land well before the section is half-scrolled
+    // past, not linger across the whole span.
+    scene.onProgress?.(0.5);
     scene.update(1 / 60, ctx);
     expect(ctx.camera.position.z).toBeCloseTo(baseZ + 220, 5);
+
+    // Past the halfway point, the pull holds at the max instead of
+    // continuing to push the camera further back.
+    scene.onProgress?.(1);
+    scene.update(1 / 60, ctx);
+    expect(ctx.camera.position.z).toBeCloseTo(baseZ + 220, 5);
+
+    // A quarter of the way through the view's span is already most of the
+    // way pulled back (easeOutExpo front-loads the motion) — not merely a
+    // quarter of the way, confirming this isn't a linear ramp.
+    scene.onProgress?.(0.25);
+    scene.update(1 / 60, ctx);
+    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.25), 5);
+    expect(ctx.camera.position.z).toBeGreaterThan(baseZ + 220 * 0.9);
 
     scene.dispose();
   });

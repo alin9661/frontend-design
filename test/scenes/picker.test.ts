@@ -22,7 +22,8 @@ import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
   BG_LAMBDA,
-  CAROUSEL_LAMBDA,
+  CAROUSEL_DAMPING,
+  CAROUSEL_STIFFNESS,
   CENTER_SCALE,
   PickerCarousel,
   SIDE_SCALE,
@@ -34,6 +35,7 @@ import {
   wrapAngle,
   wrapIndex,
 } from "@/lib/scenes/picker/carousel";
+import { smoothstep } from "@/lib/engine/core/math";
 import { DisposeBag } from "@/lib/scenes/picker/dispose-bag";
 import createPickerScene from "@/lib/scenes/picker/scene";
 import { flavors } from "@/lib/flavors";
@@ -81,11 +83,26 @@ describe("carousel angle math", () => {
     const spacing = TWO_PI / count;
     expect(scaleForAngularOffset(spacing, count)).toBeCloseTo(SIDE_SCALE, 10);
     expect(scaleForAngularOffset(-spacing, count)).toBeCloseTo(SIDE_SCALE, 10);
-    // halfway between: linear falloff -> halfway between the two scales
+    // halfway between: smoothstep(0.5) is exactly 0.5, same as a linear
+    // falloff would give at the exact midpoint (see the N8 regression test
+    // below for a point where the smoothstep and linear curves diverge).
     expect(scaleForAngularOffset(spacing / 2, count)).toBeCloseTo(
       (CENTER_SCALE + SIDE_SCALE) / 2,
       10
     );
+  });
+
+  it("N8 regression: scaleForAngularOffset eases (smoothstep) across the boundary instead of a raw linear falloff", () => {
+    const count = 5;
+    const spacing = TWO_PI / count;
+    // A quarter of the way to one flavor-spacing: smoothstep(0.25) = 0.15625,
+    // well short of a linear 0.25 fraction — the old linear implementation
+    // would land exactly at the linear expectation instead.
+    const normalized = 0.25;
+    const linearExpectation = CENTER_SCALE + (SIDE_SCALE - CENTER_SCALE) * normalized;
+    const eased = scaleForAngularOffset(spacing * normalized, count);
+    expect(smoothstep(normalized)).toBeLessThan(normalized);
+    expect(Math.abs(eased - CENTER_SCALE)).toBeLessThan(Math.abs(linearExpectation - CENTER_SCALE));
   });
 
   it("scaleForAngularOffset clamps beyond one spacing (never scales below sideScale)", () => {
@@ -217,14 +234,15 @@ describe("PickerCarousel — damped centering converges", () => {
     expect(Math.abs(wrapAngle(delta))).toBeLessThan(TWO_PI / 5 + 1e-6);
   });
 
-  it("uses the documented default lambdas", () => {
-    expect(CAROUSEL_LAMBDA).toBe(8);
+  it("uses the documented default spring/damp constants", () => {
+    expect(CAROUSEL_STIFFNESS).toBe(110);
+    expect(CAROUSEL_DAMPING).toBe(17);
     expect(BG_LAMBDA).toBe(6);
   });
 
-  it("a custom lambda changes the convergence rate", () => {
-    const slow = new PickerCarousel(FLAVOR_BGS, { lambda: 1 });
-    const fast = new PickerCarousel(FLAVOR_BGS, { lambda: 20 });
+  it("a custom stiffness changes the convergence rate (N8: springStep, not damp)", () => {
+    const slow = new PickerCarousel(FLAVOR_BGS, { stiffness: 20, damping: 17 });
+    const fast = new PickerCarousel(FLAVOR_BGS, { stiffness: 300, damping: 17 });
     slow.select(2);
     fast.select(2);
 
@@ -232,6 +250,39 @@ describe("PickerCarousel — damped centering converges", () => {
     fast.step(1 / 60);
 
     expect(Math.abs(fast.angle)).toBeGreaterThan(Math.abs(slow.angle));
+  });
+
+  it("N8 regression: rotation accelerates from rest instead of starting at maximum velocity (springStep, not damp)", () => {
+    // damp() has its steepest slope at t=0 (an exponential decaying toward
+    // the target moves FASTEST the instant it starts); a spring starting at
+    // rest (vel=0) instead ramps UP to speed. Two consecutive equal-size
+    // ticks from a standing start should therefore cover MORE ground on the
+    // second tick than the first — the opposite of what damp() would do.
+    const carousel = new PickerCarousel(FLAVOR_BGS);
+    carousel.select(2);
+
+    carousel.step(1 / 60);
+    const afterFirstTick = Math.abs(carousel.angle);
+
+    carousel.step(1 / 60);
+    const afterSecondTick = Math.abs(carousel.angle);
+    const secondTickDelta = afterSecondTick - afterFirstTick;
+
+    expect(secondTickDelta).toBeGreaterThan(afterFirstTick);
+  });
+
+  it("N8 regression: settles at rest without residual oscillation for a tiny delta", () => {
+    // Regression guard for the settle-threshold snap: a near-converged
+    // carousel re-selecting its OWN already-centered flavor must not jitter
+    // or overshoot — it should already read as converged.
+    const carousel = new PickerCarousel(FLAVOR_BGS, { initialIndex: 1 });
+    for (let i = 0; i < 300; i++) carousel.step(1 / 60);
+    expect(carousel.converged()).toBe(true);
+
+    carousel.select(1); // reselect the already-centered flavor — target unchanged
+    for (let i = 0; i < 10; i++) carousel.step(1 / 60);
+    expect(carousel.converged()).toBe(true);
+    expect(carousel.angle).toBeCloseTo(wrapAngle(targetRotationForIndex(1, 5)), 6);
   });
 });
 

@@ -107,6 +107,55 @@ describe("splat-lounge SceneModule", () => {
     scene.dispose();
   });
 
+  it("N6 regression: orbit height eases (matches easeInOutCubic), instead of the old linear ramp that kinked at t=0.5", () => {
+    const scene = createSplatLoungeScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    scene.onProgress?.(0);
+    scene.update(1 / 60, ctx);
+    const heightAt0 = ctx.camera.position.y;
+
+    scene.onProgress?.(0.5);
+    scene.update(1 / 60, ctx);
+    const heightAt05 = ctx.camera.position.y;
+
+    scene.onProgress?.(0.125);
+    scene.update(1 / 60, ctx);
+    const heightAt0125 = ctx.camera.position.y;
+
+    // localT within the [0, 0.5] segment at p=0.125 is 0.25; a LINEAR ramp
+    // would land exactly 25% of the way from heightAt0 to heightAt05.
+    // easeInOutCubic(0.25) = 4*0.25^3 = 0.0625, well short of 0.25 — the old
+    // linear code would fail this assertion.
+    const linearExpectation = heightAt0 + (heightAt05 - heightAt0) * 0.25;
+    expect(Math.abs(heightAt0125 - heightAt0)).toBeLessThan(Math.abs(linearExpectation - heightAt0));
+
+    scene.dispose();
+  });
+
+  it("N6 regression: orbit distance eases too (matches easeInOutCubic across its single 0..1 segment)", () => {
+    const scene = createSplatLoungeScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const distanceAt = (p: number): number => {
+      scene.onProgress?.(p);
+      scene.update(1 / 60, ctx);
+      return Math.hypot(ctx.camera.position.x, ctx.camera.position.z);
+    };
+
+    const distAt0 = distanceAt(0);
+    const distAt1 = distanceAt(1);
+    const distAt025 = distanceAt(0.25);
+
+    // easeInOutCubic(0.25) = 0.0625 << the 0.25 a linear ramp would give.
+    const linearExpectation = distAt0 + (distAt1 - distAt0) * 0.25;
+    expect(Math.abs(distAt025 - distAt0)).toBeLessThan(Math.abs(linearExpectation - distAt0));
+
+    scene.dispose();
+  });
+
   it("dispose removes the splat mesh from the scene", () => {
     const scene = createSplatLoungeScene();
     const ctx = makeCtx();

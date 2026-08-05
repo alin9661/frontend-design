@@ -14,13 +14,63 @@
 // Follows gl/'s layering law (§3): no document/window/react/three imports —
 // worker-safe.
 
-import { damp } from "@/lib/engine/core/math";
+import { damp, smoothstep } from "@/lib/engine/core/math";
+import { springStep } from "@/lib/engine/core/pointer";
 
 export const TWO_PI = Math.PI * 2;
 
-/** Default convergence rate for both angle and color damping (see core/math damp). */
-export const CAROUSEL_LAMBDA = 8;
+/**
+ * Motion-audit fix N8: rotation used to converge via `damp()` (exponential
+ * decay) — maximum velocity right at the click, then a long, slowly-decaying
+ * creep tail as it approached the target. Replaced with a critically-damped-
+ * ish spring (`springStep`, see core/pointer.ts) for an accelerate-then-
+ * settle feel instead: starts at rest, ramps up, eases into the target
+ * rather than crawling up to it asymptotically forever.
+ */
+export const CAROUSEL_STIFFNESS = 110;
+export const CAROUSEL_DAMPING = 17;
+/** Background-tint convergence rate (unchanged — see core/math's `damp`). */
 export const BG_LAMBDA = 6;
+
+/** `springStep` is an explicit-ish (semi-implicit Euler) integrator, unlike
+ * `damp`'s exact-for-any-dt exponential — stepping it directly with a large
+ * `dt` (e.g. a single very slow/janky frame) can be numerically unstable at
+ * this stiffness. Sub-stepping at a small fixed cap keeps it both stable and
+ * close to frame-rate independent, the property `damp` gave us for free. */
+const SPRING_SUBSTEP_MAX = 1 / 1000;
+/** Below these thresholds the spring is close enough to rest that residual
+ * (sub-visible) float jitter would otherwise linger indefinitely — snap to
+ * the exact target instead of asymptotically approaching it forever. */
+const ANGLE_SETTLE_EPSILON = 1e-4; // rad
+const ANGLE_VELOCITY_SETTLE_EPSILON = 1e-3; // rad/s
+
+/** Integrates a critically-damped-ish spring from `pos`/`vel` toward `target`
+ * over `dt`, internally sub-stepping so large `dt` values stay stable and
+ * (approximately) frame-rate independent. Snaps to `target` (zero velocity)
+ * once both position error and velocity are below their settle epsilons, so
+ * the carousel doesn't oscillate/creep forever at tiny deltas. */
+function integrateAngleSpring(
+  pos: number,
+  vel: number,
+  target: number,
+  stiffness: number,
+  damping: number,
+  dt: number
+): { pos: number; vel: number } {
+  const steps = Math.max(1, Math.ceil(dt / SPRING_SUBSTEP_MAX));
+  const subDt = dt / steps;
+  let p = pos;
+  let v = vel;
+  for (let i = 0; i < steps; i++) {
+    const next = springStep(p, v, target, stiffness, damping, subDt);
+    p = next.pos;
+    v = next.vel;
+  }
+  if (Math.abs(target - p) < ANGLE_SETTLE_EPSILON && Math.abs(v) < ANGLE_VELOCITY_SETTLE_EPSILON) {
+    return { pos: target, vel: 0 };
+  }
+  return { pos: p, vel: v };
+}
 
 /** Centered can scale (damped toward); flanking cans damp toward `SIDE_SCALE`. */
 // Was 1.35 — trimmed slightly alongside scene.ts's RING_X_OFFSET_FACTOR
@@ -64,8 +114,9 @@ export function targetRotationForIndex(index: number, count: number): number {
  * Scale for a can currently at `effectiveAngle` (radians, its placement
  * angle plus the carousel's current rotation — i.e. its angular distance
  * from "straight ahead" after rotation is applied) — 1 at the front,
- * falling off linearly to `SIDE_SCALE` by the time it's one flavor-spacing
- * away (and clamped there beyond, for count < 3 where neighbors overlap).
+ * easing (smoothstep) off to `SIDE_SCALE` by the time it's one
+ * flavor-spacing away (and clamped there beyond, for count < 3 where
+ * neighbors overlap).
  */
 export function scaleForAngularOffset(
   effectiveAngle: number,
@@ -75,7 +126,13 @@ export function scaleForAngularOffset(
 ): number {
   const spacing = count > 0 ? TWO_PI / count : TWO_PI;
   const normalized = spacing === 0 ? 0 : Math.min(1, Math.abs(wrapAngle(effectiveAngle)) / spacing);
-  return centerScale + (sideScale - centerScale) * normalized;
+  // Motion-audit fix N8: falloff used to be a raw linear lerp on `normalized`,
+  // which reads fine mid-range but has an obvious velocity corner right at
+  // the `clamp`'s boundary (one flavor-spacing away) where the slope
+  // discontinuously drops to zero. Smoothstepping `normalized` first eases
+  // the can's scale across that boundary instead of hard-cornering into it.
+  const eased = smoothstep(normalized);
+  return centerScale + (sideScale - centerScale) * eased;
 }
 
 export interface RGB {
@@ -96,7 +153,10 @@ export function hexToRgb(hex: string): RGB {
 }
 
 export interface PickerCarouselOptions {
-  lambda?: number;
+  /** Rotation spring stiffness (see core/pointer.ts's `springStep`). */
+  stiffness?: number;
+  /** Rotation spring damping (see core/pointer.ts's `springStep`). */
+  damping?: number;
   bgLambda?: number;
   initialIndex?: number;
 }
@@ -104,26 +164,29 @@ export interface PickerCarouselOptions {
 /**
  * Owns the picker's rotation/scale/color state. `select()` sets new targets
  * (called from `invoke("select", [i])`'s cross-thread RPC, or directly);
- * `step(dt)` damps current values toward those targets every frame
+ * `step(dt)` springs/damps current values toward those targets every frame
  * (SceneModule.update, see ../../engine/types.ts); `scaleFor(index)` and
  * `.bg`/`.angle` are read back each frame to drive the THREE scene graph.
  */
 export class PickerCarousel {
   readonly count: number;
   private bgHexByIndex: string[];
-  private lambda: number;
+  private stiffness: number;
+  private damping: number;
   private bgLambda: number;
 
   private _selectedIndex: number;
   private _targetAngle: number;
   private _currentAngle: number;
+  private _angleVel = 0;
   private _targetBg: RGB;
   private _currentBg: RGB;
 
   constructor(bgHexByIndex: string[], opts: PickerCarouselOptions = {}) {
     this.bgHexByIndex = bgHexByIndex;
     this.count = bgHexByIndex.length;
-    this.lambda = opts.lambda ?? CAROUSEL_LAMBDA;
+    this.stiffness = opts.stiffness ?? CAROUSEL_STIFFNESS;
+    this.damping = opts.damping ?? CAROUSEL_DAMPING;
     this.bgLambda = opts.bgLambda ?? BG_LAMBDA;
 
     this._selectedIndex = wrapIndex(opts.initialIndex ?? 0, this.count);
@@ -169,11 +232,22 @@ export class PickerCarousel {
     this.select(index);
   }
 
-  /** Damps rotation and color one tick toward their current targets. Idempotent at convergence. */
+  /**
+   * Springs rotation and damps color one tick toward their current targets.
+   * Idempotent at convergence (once settled, repeated calls are a no-op).
+   */
   step(dt: number): void {
-    this._currentAngle = wrapAngle(
-      damp(this._currentAngle, this.nearestEquivalentTarget(), this.lambda, dt)
+    const spring = integrateAngleSpring(
+      this._currentAngle,
+      this._angleVel,
+      this.nearestEquivalentTarget(),
+      this.stiffness,
+      this.damping,
+      dt
     );
+    this._angleVel = spring.vel;
+    this._currentAngle = wrapAngle(spring.pos);
+
     this._currentBg = {
       r: damp(this._currentBg.r, this._targetBg.r, this.bgLambda, dt),
       g: damp(this._currentBg.g, this._targetBg.g, this.bgLambda, dt),

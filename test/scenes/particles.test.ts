@@ -123,6 +123,17 @@ describe("colorRampForProgress — forest -> lemon brand ramp", () => {
     expect(colorRampForProgress(-5).getHex()).toBe(FLOW_COLOR_FOREST.getHex());
     expect(colorRampForProgress(5).getHex()).toBe(FLOW_COLOR_LEMON.getHex());
   });
+
+  it("P4 regression: eases (smoothstep) through progress instead of a linear lerp, holding the forest endpoint longer near p=0", () => {
+    const near = colorRampForProgress(0.1);
+    // A linear lerp at p=0.1 would land 10% of the way to lemon. smoothstep
+    // holds much closer to forest at the same p (smoothstep(0.1) = 0.028).
+    const linear = new THREE.Color().lerpColors(FLOW_COLOR_FOREST, FLOW_COLOR_LEMON, 0.1);
+    const forestDistance = (c: THREE.Color) =>
+      Math.hypot(c.r - FLOW_COLOR_FOREST.r, c.g - FLOW_COLOR_FOREST.g, c.b - FLOW_COLOR_FOREST.b);
+
+    expect(forestDistance(near)).toBeLessThan(forestDistance(linear));
+  });
 });
 
 describe("flowSpeedForProgress — scroll-driven flow speed", () => {
@@ -133,6 +144,14 @@ describe("flowSpeedForProgress — scroll-driven flow speed", () => {
     expect(flowSpeedForProgress(2)).toBe(MAX_FLOW_SPEED);
     expect(flowSpeedForProgress(0.5)).toBeGreaterThan(BASE_FLOW_SPEED);
     expect(flowSpeedForProgress(0.5)).toBeLessThan(MAX_FLOW_SPEED);
+  });
+
+  it("P4 regression: eases (smoothstep) through progress instead of a linear map, holding near BASE_FLOW_SPEED longer near p=0", () => {
+    // A linear map at p=0.1 would already be 10% of the way from BASE to
+    // MAX; smoothstep(0.1) = 0.028, so the eased speed sits much closer to
+    // BASE_FLOW_SPEED at the same progress.
+    const linearAt01 = BASE_FLOW_SPEED + (MAX_FLOW_SPEED - BASE_FLOW_SPEED) * 0.1;
+    expect(flowSpeedForProgress(0.1)).toBeLessThan(linearAt01);
   });
 });
 

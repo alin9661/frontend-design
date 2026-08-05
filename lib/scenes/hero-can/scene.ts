@@ -137,6 +137,9 @@ class HeroCanScene implements SceneModule {
   private loadToken = 0;
 
   private baseCameraZ = 0;
+  /** The per-view camera this instance is currently writing pull into. Held
+   * only so dispose() can restore it — see dispose(). */
+  private camera: THREE.PerspectiveCamera | null = null;
   private tiltX: SpringState = { pos: 0, vel: 0 };
   private tiltZ: SpringState = { pos: 0, vel: 0 };
   private spinAngle = 0;
@@ -181,6 +184,11 @@ class HeroCanScene implements SceneModule {
     this.setupRim();
     this.tryRegisterEnvironmentJob(ctx);
 
+    // Captured AFTER dispose() (called at the top of init()) has restored any
+    // pull this instance previously applied — otherwise a context-loss re-init
+    // would capture an already-pulled z as the new base and compound the pull
+    // on every restore (base -> base+220 -> base+440 -> ...).
+    this.camera = ctx.camera;
     this.baseCameraZ = ctx.camera.position.z;
     this.tiltX = { pos: 0, vel: 0 };
     this.tiltZ = { pos: 0, vel: 0 };
@@ -251,6 +259,15 @@ class HeroCanScene implements SceneModule {
 
   dispose(): void {
     this.loadToken += 1; // invalidate any in-flight loadHeadlineText
+
+    // The per-view camera outlives this module (View owns it; init() is
+    // re-runnable for context-loss restore), and update() writes an absolute
+    // `baseCameraZ + pull` into it. Hand it back unpulled so the next init()
+    // captures the true base — see the note where baseCameraZ is assigned.
+    if (this.camera) {
+      this.camera.position.z = this.baseCameraZ;
+      this.camera = null;
+    }
 
     if (this.group) {
       this.group.parent?.remove(this.group);

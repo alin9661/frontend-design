@@ -36,6 +36,7 @@ vi.mock("@/lib/engine/gl/text", () => ({
 
 import { GlText } from "@/lib/engine/gl/text";
 import createPickerScene from "@/lib/scenes/picker/scene";
+import { cameraDistanceForHeight } from "@/lib/engine/gl/view";
 import { flavors } from "@/lib/flavors";
 
 const RING_X_OFFSET_FACTOR = 0.3;
@@ -53,11 +54,33 @@ function makeFakeAssets(): AssetManager {
   };
 }
 
+/** World-z the nameplate sits at (mirrors NAMEPLATE_Z in the scene). */
+const NAMEPLATE_Z = 40;
+
+/** Visible half-height at `z`, the same frustum math the scene uses. The
+ * frustum narrows toward the camera, so this is always LESS than
+ * `rect.height / 2` for a z in front of the z=0 plane. */
+function visibleHalfHeightAt(camera: THREE.PerspectiveCamera, z: number): number {
+  return Math.tan((camera.fov * Math.PI) / 360) * Math.max(1, camera.position.z - z);
+}
+
+/** Where the nameplate should land for a given context. */
+function expectedNameplateY(ctx: ViewContext): number {
+  return -visibleHalfHeightAt(ctx.camera, NAMEPLATE_Z) * 0.68;
+}
+
 function makeViewContext(overrides: Partial<ViewContext> = {}): ViewContext {
+  const rect = overrides.rect ?? { top: 0, left: 0, width: 500, height: 500 };
+  const camera = new THREE.PerspectiveCamera(45, rect.width / rect.height, 0.1, 10000);
+  // Production's View always does this (gl/view.ts: `camera.position.z =
+  // cameraDistanceForHeight(rect.height)`), which is what makes 1 world unit
+  // == 1 CSS px at z=0. Leaving it at the THREE default of 0 gave this
+  // fixture a degenerate frustum that no real view ever has.
+  camera.position.z = cameraDistanceForHeight(rect.height);
   return {
     scene: new THREE.Scene(),
-    camera: new THREE.PerspectiveCamera(45, 1, 0.1, 10000),
-    rect: { top: 0, left: 0, width: 500, height: 500 },
+    camera,
+    rect,
     scroll: { target: 0, current: 0, velocity: 0, progress: 0, limit: 1000 },
     pointer: { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false },
     assets: makeFakeAssets(),
@@ -86,9 +109,17 @@ describe("picker scene — GL flavor nameplate placement (F-001)", () => {
     // horizontally, where it collided with the DOM flavor heading.
     expect(nameplate.position.x).not.toBe(0);
     expect(nameplate.position.x).toBeCloseTo(ctx.rect.width * RING_X_OFFSET_FACTOR);
-    expect(nameplate.position.y).toBe(-300);
-    expect(nameplate.position.y).toBeLessThan(CAN_BOTTOM_RIM_Y);
-    expect(nameplate.position.z).toBe(40);
+    expect(nameplate.position.y).toBeCloseTo(expectedNameplateY(ctx));
+    expect(nameplate.position.z).toBe(NAMEPLATE_Z);
+
+    // The placement must be INSIDE the frustum at its own depth. A flat
+    // `-0.6 * rect.height` (the previous formula) is not: the frustum
+    // narrows toward the camera, so 0.6 of the full height overshoots the
+    // bottom edge on every view — on a real 900px viewport by ~90px, i.e.
+    // the nameplate rendered off-screen entirely.
+    const halfHeight = visibleHalfHeightAt(ctx.camera, NAMEPLATE_Z);
+    expect(Math.abs(nameplate.position.y)).toBeLessThan(halfHeight);
+    expect(ctx.rect.height * 0.6).toBeGreaterThan(halfHeight);
 
     scene.dispose();
   });
@@ -110,7 +141,10 @@ describe("picker scene — GL flavor nameplate placement (F-001)", () => {
     scene.update(1 / 60, resized);
 
     expect(nameplate.position.x).toBeCloseTo(resized.rect.width * RING_X_OFFSET_FACTOR);
-    expect(nameplate.position.y).toBeCloseTo(-resized.rect.height * 0.6);
+    expect(nameplate.position.y).toBeCloseTo(expectedNameplateY(resized));
+    expect(Math.abs(nameplate.position.y)).toBeLessThan(
+      visibleHalfHeightAt(resized.camera, NAMEPLATE_Z)
+    );
     // Still tracks the ring group's own x exactly, per this file's own
     // "same x offset as ringGroup" placement comment.
     const root = ctx.scene.children[0] as THREE.Group;
@@ -138,5 +172,39 @@ describe("picker scene — GL flavor nameplate placement (F-001)", () => {
     expect(opts.align).toBe("center");
 
     scene.dispose();
+  });
+});
+
+describe("picker nameplate — frustum bounds across viewport heights", () => {
+  it("clears the settled can on a desktop-height view, and stays on-screen on a short one", async () => {
+    // Two regimes, both real:
+    //  - Tall (900px, the desktop case): the 480-unit can fits, so the
+    //    nameplate should sit BELOW its bottom rim as the F-001 placement
+    //    intends, and still inside the frustum.
+    //  - Short (500px): the can is taller than the visible half-height, so
+    //    "below the rim" is geometrically unsatisfiable — staying inside the
+    //    frustum wins. The old `-0.6 * rect.height` satisfied NEITHER: it
+    //    was outside the bottom edge in both regimes.
+    for (const height of [900, 500]) {
+      const scene = createPickerScene();
+      const ctx = makeViewContext({
+        rect: { top: 0, left: 0, width: 1440, height },
+      });
+      await scene.init(ctx);
+
+      const nameplate = glTextInstances[glTextInstances.length - 1]!.object3d;
+      const halfHeight = visibleHalfHeightAt(ctx.camera, NAMEPLATE_Z);
+
+      expect(nameplate.position.y).toBeLessThan(0);
+      expect(Math.abs(nameplate.position.y)).toBeLessThan(halfHeight);
+      // The formula this replaced would have been off-screen at both heights.
+      expect(height * 0.6).toBeGreaterThan(halfHeight);
+
+      if (height === 900) {
+        expect(nameplate.position.y).toBeLessThan(CAN_BOTTOM_RIM_Y);
+      }
+
+      scene.dispose();
+    }
   });
 });

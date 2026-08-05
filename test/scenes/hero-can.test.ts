@@ -641,3 +641,37 @@ describe("hero-can scene — GL headline degrade path (@/lib/engine/gl/text not 
     scene.dispose();
   });
 });
+
+describe("hero-can scene — camera base across re-initialization", () => {
+  it("hands the camera back unpulled on dispose, so a re-init can't compound the pull", () => {
+    // The per-view camera OUTLIVES this module: View owns it, and init() is
+    // re-runnable (context-loss restore). update() writes an ABSOLUTE
+    // `baseCameraZ + pull` into it, and init() captures whatever z it finds
+    // as the new base. Without a restore on dispose, a restore-at-full-pull
+    // captured `base + 220` as the base and the next frame drove the camera
+    // to `base + 440`, compounding on every subsequent re-init.
+    const scene = createHeroCanScene();
+    const ctx = makeCtx();
+    const trueBase = ctx.camera.position.z;
+
+    scene.init(ctx);
+    // Drive it to full pull: anything at/after restProgress + PULL_SPAN.
+    scene.onProgress?.(1);
+    scene.update(1 / 60, ctx);
+    const pulled = ctx.camera.position.z;
+    expect(pulled).toBeGreaterThan(trueBase);
+
+    scene.dispose();
+    expect(ctx.camera.position.z).toBe(trueBase);
+
+    // Re-init on the SAME camera (the context-loss path) and drive to full
+    // pull again — it must land on the same absolute z, not double it.
+    scene.init(ctx);
+    scene.onProgress?.(1);
+    scene.update(1 / 60, ctx);
+    expect(ctx.camera.position.z).toBeCloseTo(pulled, 6);
+
+    scene.dispose();
+    expect(ctx.camera.position.z).toBe(trueBase);
+  });
+});

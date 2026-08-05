@@ -42,18 +42,30 @@ const KEY_LIGHT_INTENSITY = 1.8;
  * confirming 0.22 still let the selected (CENTER_SCALE-enlarged) can clip
  * the "Raspberry Yuzu" pill at 1440px. */
 const RING_X_OFFSET_FACTOR = 0.3;
+/** World-z the nameplate sits at — slightly toward the camera so it reads in
+ * front of the carousel ring. */
+const NAMEPLATE_Z = 40;
 /**
- * Fraction of the view's own CSS height the nameplate sits below center
- * (H3 fix). This used to be a flat `y = -300` — "below the settled can's
- * bottom rim (can height 480, center y=0 → bottom -240)" per the F-001
- * comment, but that margin was computed for one assumed ("tall") viewport
- * height and never revisited per-view, so a SHORT viewport could already
- * put it near/past the frustum edge. 0.6 reproduces the original -300
- * exactly at this scene's long-standing test fixture height (500 — see
- * test/scenes/picker-nameplate.test.ts), while now tracking the view's
- * actual height instead of assuming one.
+ * How far down the visible half-height the nameplate is parked, as a fraction.
+ *
+ * This was a flat `y = -300`, then briefly `-0.6 * rect.height` — both wrong
+ * for the same underlying reason: neither is the frustum. The engine sets
+ * `camera.position.z = cameraDistanceForHeight(rect.height)` so that 1 world
+ * unit == 1 CSS px *at z=0*; the frustum NARROWS toward the camera, so at
+ * NAMEPLATE_Z the visible half-height is already less than `rect.height / 2`.
+ * `0.6 * rect.height` is therefore outside the bottom edge on any view —
+ * on a real 900px viewport it put the nameplate ~90px below the frustum,
+ * i.e. invisible. Derive from the frustum at the nameplate's own depth
+ * instead, and keep a margin inside it.
  */
-const NAMEPLATE_Y_FACTOR = 0.6;
+const NAMEPLATE_MARGIN_FACTOR = 0.68;
+
+/** Visible half-height (world units) at `z` for a perspective camera looking
+ * down -Z from `camera.position.z`. */
+function visibleHalfHeightAt(camera: THREE.PerspectiveCamera, z: number): number {
+  const distance = Math.max(1, camera.position.z - z);
+  return Math.tan((camera.fov * Math.PI) / 360) * distance;
+}
 
 interface CanEntry {
   index: number;
@@ -192,8 +204,8 @@ class PickerScene implements SceneModule {
         // corrects it from the live ctx).
         this.flavorText.object3d.position.set(
           ctx.rect.width * RING_X_OFFSET_FACTOR,
-          -ctx.rect.height * NAMEPLATE_Y_FACTOR,
-          40
+          -visibleHalfHeightAt(ctx.camera, NAMEPLATE_Z) * NAMEPLATE_MARGIN_FACTOR,
+          NAMEPLATE_Z
         );
         this.root?.add(this.flavorText.object3d);
         this.disposeBag.add(() => this.flavorText?.dispose());
@@ -252,7 +264,8 @@ class PickerScene implements SceneModule {
       // Now tracked here every frame, same as the ring.
       if (this.flavorText) {
         this.flavorText.object3d.position.x = ctx.rect.width * RING_X_OFFSET_FACTOR;
-        this.flavorText.object3d.position.y = -ctx.rect.height * NAMEPLATE_Y_FACTOR;
+        this.flavorText.object3d.position.y =
+          -visibleHalfHeightAt(ctx.camera, NAMEPLATE_Z) * NAMEPLATE_MARGIN_FACTOR;
       }
     }
     for (const can of this.cans) {

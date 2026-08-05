@@ -75,3 +75,32 @@ export function smoothstep(t: number): number {
   const c = clamp(t, 0, 1);
   return c * c * (3 - 2 * c);
 }
+
+/**
+ * H4 fix: moved here from core/pointer.ts (still re-exported from there for
+ * existing importers — see that file) because it's a pure numeric primitive
+ * with no DOM dependency, same as everything else in this file — it just
+ * happened to be born next to `PointerTracker`. core/pointer.ts's primary
+ * export binds `window` and registers DOM listeners (transitively importing
+ * core/ticker.ts's rAF + `document.visibilitychange`), which made this
+ * module's own "no document/window/react/three imports — worker-safe"
+ * claim literally false for any worker-safe module that imported
+ * `springStep` from there (e.g. lib/scenes/picker/carousel.ts).
+ *
+ * Semi-implicit Euler spring step: `vel` is updated from the spring force
+ * first, then `pos` is advanced by the *new* velocity (more stable than
+ * explicit Euler for typical stiffness/damping ranges). Pure.
+ */
+export function springStep(
+  pos: number,
+  vel: number,
+  target: number,
+  stiffness: number,
+  damping: number,
+  dt: number
+): { pos: number; vel: number } {
+  const force = (target - pos) * stiffness - vel * damping;
+  const nextVel = vel + force * dt;
+  const nextPos = pos + nextVel * dt;
+  return { pos: nextPos, vel: nextVel };
+}

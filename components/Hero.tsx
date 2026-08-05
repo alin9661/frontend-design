@@ -3,6 +3,7 @@
 import { motion, useReducedMotion, useTransform } from "framer-motion";
 import ParallaxScene, { useParallax, PARALLAX_SHIFT_PX } from "@/components/ParallaxScene";
 import FloatingItem from "@/components/FloatingItem";
+import { CTA_SPRING, REVEAL } from "@/lib/motion";
 import Leaf from "@/components/svg/Leaf";
 import Citrus from "@/components/svg/Citrus";
 import Berry from "@/components/svg/Berry";
@@ -26,7 +27,7 @@ const item = {
   show: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] as const },
+    transition: { ...REVEAL, duration: 0.7 },
   },
 };
 
@@ -180,12 +181,15 @@ export default function Hero() {
             variants={item}
             className="mt-10 flex flex-col sm:flex-row items-center gap-6"
           >
-            <a
+            <motion.a
               href="#flavors"
-              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg transition-transform hover:scale-105 active:scale-95"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.97 }}
+              transition={CTA_SPRING}
+              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg"
             >
               SHOP THE FLAVORS
-            </a>
+            </motion.a>
             <a
               href="#benefits"
               className="font-body text-sm tracking-[0.15em] uppercase text-forest/80 underline underline-offset-4 decoration-forest/40 transition-colors hover:text-forest"

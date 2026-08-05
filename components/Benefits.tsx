@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef } from "react";
-import { motion, useInView } from "framer-motion";
+import { motion } from "framer-motion";
 import Leaf from "@/components/svg/Leaf";
 import Citrus from "@/components/svg/Citrus";
 import Berry from "@/components/svg/Berry";
 import { brand, flavorById } from "@/lib/flavors";
+import { REVEAL } from "@/lib/motion";
 
 const lemon = flavorById("lemon");
 const mint = flavorById("mint");
@@ -51,28 +51,26 @@ const item = {
   visible: {
     y: 0,
     opacity: 1,
-    transition: { duration: 0.6, ease: [0.22, 1, 0.36, 1] as const },
+    transition: REVEAL,
   },
 };
 
 export default function Benefits() {
-  const sectionRef = useRef<HTMLElement>(null);
-  // Gates the three infinite decorative bobs below so they don't keep
-  // animating while scrolled offscreen. `initial: true` assumes visible
-  // until the (real) IntersectionObserver says otherwise.
-  const isInView = useInView(sectionRef, { amount: 0.2, initial: true });
-
   return (
     <section
-      ref={sectionRef}
       id="benefits"
       className="relative overflow-hidden bg-forest py-32 text-cream"
     >
-      {/* decorative floating leaves */}
+      {/* decorative floating leaves. These always run — they're a cheap
+          composited transform, so there's no need to gate them on
+          scroll-into-view: gating them caused the bob to freeze mid-air when
+          scrolled offscreen and snap on re-entry. The section itself only
+          being on/off-screen is enough to make them invisible when it
+          matters. */}
       <motion.div
         className="pointer-events-none absolute -left-8 top-16 w-24 opacity-10 sm:w-32"
         aria-hidden="true"
-        animate={isInView ? { y: [0, -14, 0], rotate: [0, 6, 0] } : undefined}
+        animate={{ y: [0, -14, 0], rotate: [0, 6, 0] }}
         transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
       >
         <Leaf color={brand.cream} />
@@ -80,7 +78,7 @@ export default function Benefits() {
       <motion.div
         className="pointer-events-none absolute right-4 top-1/3 w-16 opacity-10 sm:w-24"
         aria-hidden="true"
-        animate={isInView ? { y: [0, 16, 0], rotate: [0, -8, 0] } : undefined}
+        animate={{ y: [0, 16, 0], rotate: [0, -8, 0] }}
         transition={{ duration: 8.5, repeat: Infinity, ease: "easeInOut", delay: 0.6 }}
       >
         <Leaf color={brand.cream} />
@@ -88,7 +86,7 @@ export default function Benefits() {
       <motion.div
         className="pointer-events-none absolute bottom-10 left-1/4 w-14 opacity-10 sm:w-20"
         aria-hidden="true"
-        animate={isInView ? { y: [0, -10, 0], rotate: [0, 5, 0] } : undefined}
+        animate={{ y: [0, -10, 0], rotate: [0, 5, 0] }}
         transition={{ duration: 6.5, repeat: Infinity, ease: "easeInOut", delay: 1.2 }}
       >
         <Leaf color={brand.cream} />
@@ -99,7 +97,7 @@ export default function Benefits() {
           initial={{ y: 40, opacity: 0 }}
           whileInView={{ y: 0, opacity: 1 }}
           viewport={{ once: true, amount: 0.4 }}
-          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+          transition={REVEAL}
           className="font-display text-[clamp(2.5rem,7vw,5.5rem)] uppercase leading-[0.9]"
         >
           BETTER ENERGY STARTS HERE

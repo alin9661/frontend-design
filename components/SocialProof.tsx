@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { decor } from "@/lib/flavors";
+import { REVEAL } from "@/lib/motion";
 
 const MARQUEE_TEXT = "JOIN THE #MATEINAFAMILIA ★ ".repeat(6);
 
@@ -35,8 +36,8 @@ export default function SocialProof() {
         <motion.div
           initial={{ y: 40, opacity: 0 }}
           whileInView={{ y: 0, opacity: 1 }}
-          viewport={{ once: true, amount: 0.5 }}
-          transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+          viewport={{ once: true, amount: 0.25 }}
+          transition={REVEAL}
         >
           <div
             role="img"

@@ -34,6 +34,7 @@ import type { RectData, SceneModule, ViewContext } from "@/lib/engine/types";
 import { easeInOutCubic, mapRange, smoothstep } from "@/lib/engine/core/math";
 import { Timeline } from "@/lib/engine/gl/timeline";
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
+import { createLabelTexture } from "@/lib/scenes/hero-can/label-texture";
 import { decor, flavorById, flavors } from "@/lib/flavors";
 
 // Anatomy section isn't flavor-specific copy, so any can from the lineup
@@ -167,6 +168,7 @@ class ExplodedScene implements SceneModule {
 
   private ambient: THREE.AmbientLight | null = null;
   private directional: THREE.DirectionalLight | null = null;
+  private rim: THREE.DirectionalLight | null = null;
 
   private scene: THREE.Scene | null = null;
   private rect: RectData = { top: 0, left: 0, width: 0, height: 0 };
@@ -181,10 +183,20 @@ class ExplodedScene implements SceneModule {
     this.rect = ctx.rect;
 
     const flavor = flavors.find((f) => f.id === DEFAULT_FLAVOR_ID) ?? flavors[0]!;
-    const built = buildCan(flavor);
+    // Real label texture (design-review F-002): without one, buildCan's
+    // label band falls back to solid `flavor.accent` — for mint that's
+    // #14574A, a near-black slab that swallowed the whole part against this
+    // section's dark background. The printed label also simply makes more
+    // sense in the section whose copy is literally about the label.
+    const labelTexture = createLabelTexture(flavor);
+    const built = buildCan(flavor, { labelTexture });
     const group = built.group;
     this.group = group;
-    this.canDispose = built.dispose;
+    const disposeBuilt = built.dispose;
+    this.canDispose = () => {
+      disposeBuilt();
+      labelTexture.dispose();
+    };
     group.position.x = ctx.rect.width * ASSEMBLY_X_OFFSET_FACTOR;
     ctx.scene.add(group);
 
@@ -208,10 +220,18 @@ class ExplodedScene implements SceneModule {
       this.registerPart(key, mesh);
     }
 
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.5);
-    this.directional = new THREE.DirectionalLight(0xffffff, 1);
-    this.directional.position.set(1, 1, 1);
-    ctx.scene.add(this.ambient, this.directional);
+    // Lighting (design-review F-002): mint's label wraps most of the can in
+    // #24765F, which is close in value to this section's forest background —
+    // at the old ambient 0.5 / key 1.0-from-(1,1,1) the assembly read as a
+    // black silhouette. Brighter key pulled toward the camera lights the
+    // faces the viewer actually sees, and a cool rim from behind-left cuts
+    // the silhouette off the background.
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.75);
+    this.directional = new THREE.DirectionalLight(0xffffff, 1.5);
+    this.directional.position.set(0.8, 1.2, 1.8);
+    this.rim = new THREE.DirectionalLight(0xcfe8dd, 0.9);
+    this.rim.position.set(-1.2, 0.4, -1.5);
+    ctx.scene.add(this.ambient, this.directional, this.rim);
 
     this.leaderMaterial = new THREE.LineBasicMaterial({
       color: LEADER_LINE_COLOR,
@@ -341,8 +361,10 @@ class ExplodedScene implements SceneModule {
 
     if (this.ambient) this.ambient.parent?.remove(this.ambient);
     if (this.directional) this.directional.parent?.remove(this.directional);
+    if (this.rim) this.rim.parent?.remove(this.rim);
     this.ambient = null;
     this.directional = null;
+    this.rim = null;
 
     if (this.group) this.group.parent?.remove(this.group);
     this.canDispose?.();

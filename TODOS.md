@@ -26,6 +26,34 @@ can materials brightened (metalness-without-envmap fix). Remaining: picker
 background at 1440px (cosmetic), and the splat can's front face could still
 be lighter. Pure art-direction iteration via screenshot loops.
 
+### Shared label-texture cache
+**Priority:** P3
+`createLabelTexture` is called independently by hero-can, exploded, and picker
+(x5), so the page holds seven RGBA label textures — six at the 1024x2048 default
+plus the exploded section's reduced one. Hero and exploded both draw the same
+mint label, so before v0.2.1.0 those two were byte-identical; the exploded one
+is now 512x1024 (v0.2.1.0 review, item H5), which shrinks the duplicate rather
+than removing it. A real
+fix is a flavor-keyed cache with refcounted disposal; deferred because texture
+lifetime across context-loss re-init needs its own design and tests.
+
+### Stage calls update() before onProgress()
+**Priority:** P3
+`lib/engine/gl/stage.ts` delivers the frame's `update(dt)` before
+`onProgress(p)`, so any scene that stores progress in `onProgress` and consumes
+it in `update` trails scroll by one frame. hero-can is the only such scene today
+and works around it by seeding `viewProgress` from live scroll in `init()`
+(v0.2.1.0 review, item H6). Swapping the call order would fix it globally but
+every other scene depends on the current ordering — needs a Stage-level test
+sweep before changing.
+
+### TESTING.md test-layer list is stale
+**Priority:** P4
+The Deep Wave section still says "42 files" and doesn't list
+`test/scenes/hero-can-headline.test.ts` or `test/scenes/picker-nameplate.test.ts`
+(added v0.2.1.0). Not updated in that release because the file was being edited
+concurrently by unrelated work on the same worktree.
+
 ### Hot-path allocation pass
 **Priority:** P3
 Per-frame object churn in Stage/render.worker/host/EngineProvider tick

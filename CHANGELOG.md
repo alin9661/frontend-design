@@ -3,6 +3,54 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.2.1.0] - 2026-08-04
+
+### Changed
+- Motion across both pages now speaks one language. Entrances, flavor swaps,
+  hover feedback, and scroll reveals share a single set of easing and duration
+  tokens instead of four hand-tuned curves, so the site reads as one piece
+  rather than a collection of separately-animated parts.
+- Picking a flavor is now a single choreographed moment. The background, the
+  giant flavor name, the can, and the description used to arrive on five
+  different timings; they now move together, and the selection dot responds to
+  a click in 200ms instead of 600ms.
+- The `/deep-wave` scenes ease into their beats instead of tracking scroll
+  literally. The can is assembled when its section arrives and fully apart
+  before it leaves, the splat camera no longer changes direction abruptly
+  mid-orbit, the flavor carousel accelerates and settles instead of lurching,
+  and the loading bar slides rather than stepping.
+- Decorative floating items pass through their resting position, so nothing
+  jumps when the page loads.
+
+### Fixed
+- The hero can's scroll-driven camera pull works at all. It read the whole
+  page's scroll instead of its own section's, then a first fix over-corrected
+  and pinned it at maximum from the first frame; it now ramps across the
+  hero's own span, so the can actually settles back as you scroll.
+- GL headlines no longer double-render the words already on the page. The hero
+  text sat inside the can and poked out around it, and the particles title
+  landed on top of the DOM heading; GL type is now a deliberate backdrop and
+  caption.
+- Products render in their real colors. Every can carried metalness values that
+  need an environment map to look right, and without one they silently
+  discarded most of their color — the cans read olive-brown instead of mint,
+  gold, and coral.
+- The pointer field's 300 leaves and berries are visible again. They requested
+  per-vertex colors from geometry that has none, which renders as black.
+- The splat lounge reads as a can on a table. Its ambient haze stacked into
+  near-solid dark shapes that swallowed the subject.
+- The exploded-can diagram lifts off its background instead of reading as a
+  silhouette.
+- The hero can's tilt tracks the cursor without the previous lag.
+- Reduced-motion users get a still loading bar; its transition was raw CSS and
+  escaped the site-wide motion setting.
+- Keyboard users get a visible focus ring on both primary buttons.
+
+### Added
+- Test coverage for the parts of the engine that only showed up on screen:
+  watermark placement, nameplate placement, light rigs, the metalness budget,
+  splat density, and the carousel's large-frame stability. 634 → 708 tests.
+
 ## [0.2.0.0] - 2026-07-31
 
 ### Added

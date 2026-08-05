@@ -27,7 +27,12 @@ const item = {
   show: {
     opacity: 1,
     y: 0,
-    transition: { ...REVEAL, duration: 0.7 },
+    // D5 fix: was `{ ...REVEAL, duration: 0.7 }` — spreading the token then
+    // overriding the one field it standardizes defeats the point of having
+    // it. Hero's stacked eyebrow/headline/subcopy/CTA reveal is a regular
+    // (not oversized-wordmark-scale) entrance, so it stays on plain REVEAL
+    // rather than switching to REVEAL_SLOW — see that token's doc comment.
+    transition: REVEAL,
   },
 };
 
@@ -186,7 +191,12 @@ export default function Hero() {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.97 }}
               transition={CTA_SPRING}
-              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg"
+              // E1 fix: whileHover/whileTap give pointer users a spring, but
+              // switching off CSS hover/active classes left keyboard users
+              // with only the UA default ring on a `rounded-full` pill — an
+              // explicit focus-visible ring restores parity, in forest (this
+              // pill's own accent) against its cream background.
+              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-forest"
             >
               SHOP THE FLAVORS
             </motion.a>

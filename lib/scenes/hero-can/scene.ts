@@ -16,8 +16,8 @@
 import * as THREE from "three";
 import type { SceneModule, ViewContext } from "@/lib/engine/types";
 import { flavorById } from "@/lib/flavors";
-import { clamp, easeOutExpo } from "@/lib/engine/core/math";
-import { springStep } from "@/lib/engine/core/pointer";
+import { easeOutExpo, mapRange, springStep } from "@/lib/engine/core/math";
+import { computeProgress } from "@/lib/engine/gl/view";
 import { buildCan, getCanLayout, type BuiltCan } from "./can-geometry";
 import { createLabelTexture } from "./label-texture";
 
@@ -33,8 +33,21 @@ const TILT_MAX = 0.22; // rad
 // tighter, single perceptible smoothing stage.
 const TILT_STIFFNESS = 140;
 const TILT_DAMPING = 20;
-/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over the hero's OWN view-progress span. */
+/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over the pull-band described by PULL_SPAN below. */
 const SCROLL_CAMERA_PULL = 220;
+/**
+ * H1 fix: the hero is the document's FIRST section, so its own per-view
+ * progress (`computeProgress`, gl/view.ts) is ~0.5 at scrollY=0, not 0 —
+ * `(viewportH - rect.top) / (viewportH + rect.height)` with `rect.top ≈ 0`
+ * and `rect.height ≈ viewportH`. The pull used to assume progress started
+ * at 0, so `clamp(p*2,0,1)` was already pegged at 1 on the very first frame
+ * — the camera sat fully pulled back before any scrolling happened. The
+ * pull now ramps over a band of size PULL_SPAN starting at the section's own
+ * REST progress (its progress at scrollY=0, derived per-instance in init()
+ * so this stays correct even if the hero ever stops being the first section
+ * or its height changes — never hardcode 0.5 here).
+ */
+const PULL_SPAN = 0.25; // full pull after ~a quarter of the view's own progress span above rest
 const AMBIENT_INTENSITY = 0.65;
 const KEY_LIGHT_INTENSITY = 1.4;
 const RIM_EMISSIVE_INTENSITY = 1.6;
@@ -137,8 +150,20 @@ class HeroCanScene implements SceneModule {
    * after only ~1/6 of the full page's scroll, so the document-wide
    * progress never got anywhere near far enough for the designed 220px pull
    * to actually land while the hero was visible.
+   *
+   * H1 fix: seeded from the LIVE scroll position in init() (not hardcoded
+   * 0) so the very first update() call — before Stage's next frame calls
+   * onProgress() — already reflects wherever the page actually is, instead
+   * of momentarily rendering at baseCameraZ and popping once the real
+   * onProgress() value arrives (see H6).
    */
   private viewProgress = 0;
+  /**
+   * H1 fix: this view's own progress at scrollY=0 — the floor the pull-band
+   * ramps up from. Computed fresh in init() from the live rect/viewport so
+   * it stays correct if the hero's position or height ever changes.
+   */
+  private restProgress = 0;
 
   init(ctx: ViewContext): void {
     // Re-runnable: tear down any previous build first (context-loss restore
@@ -160,7 +185,15 @@ class HeroCanScene implements SceneModule {
     this.tiltX = { pos: 0, vel: 0 };
     this.tiltZ = { pos: 0, vel: 0 };
     this.spinAngle = 0;
-    this.viewProgress = 0;
+    // H1 fix: this view's progress at scrollY=0 is the pull-band's floor —
+    // NOT 0 (see PULL_SPAN's comment for why the hero, being the first
+    // section, never actually sees progress 0).
+    this.restProgress = computeProgress(ctx.rect, 0, ctx.size.height);
+    // H6: seed from the CURRENT scroll (not always 0 — e.g. a context-loss
+    // reinit mid-scroll) so the first update() call already lands at the
+    // right pull instead of momentarily reading rest and popping once the
+    // next onProgress() arrives.
+    this.viewProgress = computeProgress(ctx.rect, ctx.scroll.current, ctx.size.height);
 
     this.loadToken += 1;
     void this.loadHeadlineText(ctx, this.loadToken);
@@ -180,12 +213,23 @@ class HeroCanScene implements SceneModule {
     // Stage.update() at all when !reducedMotion, so under reduced motion
     // this line simply doesn't run either — see the workstream report.
     //
-    // The hero starts at scroll 0, so its readable beat is the FIRST HALF of
-    // its own view-progress span (`p * 2`, clamped 0..1 so the back half
-    // just holds at the fully-pulled-back position instead of continuing to
-    // push the camera further). easeOutExpo front-loads the pull so it reads
-    // as a quick, decisive push rather than a linear drift.
-    const pull = easeOutExpo(clamp(this.viewProgress * 2, 0, 1));
+    // The hero's readable beat is the PULL_SPAN-wide band starting at this
+    // view's own rest progress (its progress at scrollY=0 — see restProgress
+    // above), so the pull always starts from "no scroll yet" regardless of
+    // where in [0,1] that actually sits for a first-in-document section.
+    // easeOutExpo front-loads the pull so it reads as a quick, decisive push
+    // rather than a linear drift; mapRange's clampOut holds the band's ends
+    // flat (0 before rest, 1 once PULL_SPAN is covered) instead of
+    // extrapolating past them.
+    const pullT = mapRange(
+      this.viewProgress,
+      this.restProgress,
+      Math.min(1, this.restProgress + PULL_SPAN),
+      0,
+      1,
+      true
+    );
+    const pull = easeOutExpo(pullT);
     ctx.camera.position.z = this.baseCameraZ + pull * SCROLL_CAMERA_PULL;
 
     if (ctx.reducedMotion) {

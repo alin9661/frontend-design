@@ -23,15 +23,26 @@ import {
 } from "@/lib/scenes/hero-can/can-geometry";
 import { createLabelTexture } from "@/lib/scenes/hero-can/label-texture";
 import createHeroCanScene from "@/lib/scenes/hero-can/scene";
-import { clamp, easeOutExpo } from "@/lib/engine/core/math";
+import { easeOutExpo, mapRange } from "@/lib/engine/core/math";
+import { computeProgress } from "@/lib/engine/gl/view";
 
-/** Mirrors scene.ts's C2 camera-pull formula exactly, so these tests assert
+/** Mirrors scene.ts's H1 camera-pull formula exactly, so these tests assert
  * the real eased/windowed shape instead of duplicating a weakened linear
- * approximation of it. */
+ * approximation of it. `restProgress` is this view's OWN progress at
+ * scrollY=0 (~0.5 for a top-pinned, full-viewport-height section like the
+ * default `makeCtx()` fixture below — see H1: the hero is the document's
+ * first section, so it never actually sees progress 0). */
 const SCROLL_CAMERA_PULL = 220;
-function expectedCameraPull(viewProgress: number): number {
-  return easeOutExpo(clamp(viewProgress * 2, 0, 1)) * SCROLL_CAMERA_PULL;
+const PULL_SPAN = 0.25;
+function expectedCameraPull(viewProgress: number, restProgress: number): number {
+  const t = mapRange(viewProgress, restProgress, Math.min(1, restProgress + PULL_SPAN), 0, 1, true);
+  return easeOutExpo(t) * SCROLL_CAMERA_PULL;
 }
+
+/** The default `makeCtx()` fixture below is a top-pinned, full-viewport
+ * section (rect.top=0, rect.height === size.height), so its rest progress
+ * is exactly what `computeProgress` returns at scrollY=0 for that shape. */
+const DEFAULT_REST_PROGRESS = computeProgress({ top: 0, left: 0, width: 800, height: 600 }, 0, 600);
 
 const MINT = flavorById("mint");
 
@@ -176,6 +187,32 @@ describe("buildCan — group structure", () => {
     expect(mat.map).toBe(texture);
     built.dispose();
     texture.dispose();
+  });
+
+  it("keeps every part's metalness token-low, since no envMap is ever wired (F-005 regression)", () => {
+    // Regression (design-review F-005): MeshStandardMaterial scales diffuse
+    // by (1 - metalness) and expects an environment map to give that energy
+    // back as reflections. Every consumer of buildCan lights these cans
+    // WITHOUT one (the PMREM job is a documented no-op), so the old values
+    // (shell 0.35, lid 0.75, tab 0.85) silently discarded 35-85% of each
+    // part's authored color — the "muddy olive cans" finding.
+    const built = buildCan(MINT);
+    const shell = built.parts.shell.material as THREE.MeshStandardMaterial;
+    const lid = built.parts.lid.material as THREE.MeshStandardMaterial;
+    const tab = built.parts.tab.material as THREE.MeshStandardMaterial;
+
+    expect(shell.metalness).toBeCloseTo(0.1);
+    expect(lid.metalness).toBeCloseTo(0.4);
+    expect(tab.metalness).toBeCloseTo(0.45);
+
+    for (const material of [shell, lid, tab]) {
+      // The premise of the budget: nothing hands these materials an envMap,
+      // so the metalness ceiling has to stay low until one ships.
+      expect(material.envMap).toBeNull();
+      expect(material.metalness).toBeLessThanOrEqual(0.5);
+    }
+
+    built.dispose();
   });
 
   it("falls back to a flat flavor.accent color when no labelTexture is passed", () => {
@@ -402,16 +439,21 @@ describe("hero-can scene — update: idle spin + pointer tilt + scroll camera pu
     scene.dispose();
   });
 
-  it("reduced motion: no idle spin, no pointer tilt (static frame), but per-view progress still pulls the camera", () => {
+  it("F1 fix: reduced motion — no idle spin, no pointer tilt (static frame)", () => {
+    // F1: this used to also assert a camera-pull value at onProgress(0.5),
+    // certifying a state production can never reach — Stage only calls
+    // update() (which is what drives onProgress downstream) when
+    // !reducedMotion (see worker/host.ts, worker/render.worker.ts), so under
+    // real reduced motion this scene's update()/onProgress() are never
+    // invoked at all. The camera-pull math itself is covered by the
+    // non-reduced-motion tests below, where it's actually reachable.
     const scene = createHeroCanScene();
     const ctx = makeCtx({
       reducedMotion: true,
       pointer: { x: 1, y: 1, vx: 0, vy: 0, down: false, inside: true },
     });
     scene.init(ctx);
-    scene.onProgress?.(0.5);
     const group = ctx.scene.children.find((o) => o instanceof THREE.Group) as THREE.Group;
-    const baseZ = ctx.camera.position.z;
 
     scene.update(1 / 60, ctx);
     scene.update(1 / 60, ctx);
@@ -419,62 +461,110 @@ describe("hero-can scene — update: idle spin + pointer tilt + scroll camera pu
     expect(group.rotation.y).toBe(0);
     expect(group.rotation.x).toBe(0);
     expect(group.rotation.z).toBe(0);
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.5), 5);
 
     scene.dispose();
   });
 
   it("BUG C2 regression: camera pull is driven by onProgress()'s per-view progress, NOT ctx.scroll.progress (the global document fraction)", () => {
-    // Before the fix, `update()` read `ctx.scroll.progress` directly. The
+    // Before the C2 fix, `update()` read `ctx.scroll.progress` directly. The
     // hero view is culled from view (and its OWN progress pegged near 1)
     // after roughly 1/6 of the full page's scroll, so a global progress
     // this small (0.05) would never move the camera at all under the old
-    // code even though the hero's own span is nearly halfway done.
+    // code even though the hero's own span is well past its rest point.
     const scene = createHeroCanScene();
     const ctx = makeCtx({ scroll: { target: 0, current: 0, velocity: 0, progress: 0.05, limit: 1000 } });
     scene.init(ctx);
     const baseZ = ctx.camera.position.z;
+    const p = DEFAULT_REST_PROGRESS + PULL_SPAN * 0.5; // reachable: partway through this view's own pull band
 
-    scene.onProgress?.(0.5); // this view's own progress, independent of ctx.scroll.progress
+    scene.onProgress?.(p); // this view's own progress, independent of ctx.scroll.progress
     scene.update(1 / 60, ctx);
 
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.5), 5);
+    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(p, DEFAULT_REST_PROGRESS), 5);
     expect(ctx.camera.position.z).not.toBeCloseTo(baseZ + ctx.scroll.progress * 220, 2);
 
     scene.dispose();
   });
 
-  it("per-view progress pulls the camera back, eased (easeOutExpo) over just the FIRST HALF of this view's own span", () => {
+  it("H1 regression: at this view's own rest progress (its progress at scrollY=0) the pull is exactly 0", () => {
+    // The hero is the document's FIRST section, so at scrollY=0 its OWN
+    // per-view progress is ~0.5, not 0 (see gl/view.ts's computeProgress).
+    // Pre-fix, `clamp(p*2,0,1)` assumed progress started at 0, so
+    // onProgress(~0.5) already read `clamp(1,0,1)=1` -> the camera sat
+    // FULLY pulled back (baseZ+220) on the very first frame, before any
+    // scroll happened at all. This assertion (pull===0 at rest) would FAIL
+    // against that pre-fix code, which produced baseZ+220 here instead.
     const scene = createHeroCanScene();
     const ctx = makeCtx();
     scene.init(ctx);
     const baseZ = ctx.camera.position.z;
 
-    scene.onProgress?.(0);
+    scene.onProgress?.(DEFAULT_REST_PROGRESS);
     scene.update(1 / 60, ctx);
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ, 5);
+    expect(ctx.camera.position.z).toBe(baseZ);
 
-    // Halfway through the view's own span: already fully pulled back
-    // (p*2 clamps to 1) — the hero starts at scroll 0, so its readable
-    // camera-pull beat has to land well before the section is half-scrolled
-    // past, not linger across the whole span.
-    scene.onProgress?.(0.5);
-    scene.update(1 / 60, ctx);
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ + 220, 5);
+    scene.dispose();
+  });
 
-    // Past the halfway point, the pull holds at the max instead of
-    // continuing to push the camera further back.
+  it("H1: pull increases monotonically above rest progress, reaching the full 220 within PULL_SPAN, then holds", () => {
+    const scene = createHeroCanScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const baseZ = ctx.camera.position.z;
+
+    const samples = [
+      DEFAULT_REST_PROGRESS,
+      DEFAULT_REST_PROGRESS + PULL_SPAN * 0.25,
+      DEFAULT_REST_PROGRESS + PULL_SPAN * 0.5,
+      DEFAULT_REST_PROGRESS + PULL_SPAN * 0.75,
+      DEFAULT_REST_PROGRESS + PULL_SPAN,
+    ];
+    const zs = samples.map((p) => {
+      scene.onProgress?.(p);
+      scene.update(1 / 60, ctx);
+      return ctx.camera.position.z;
+    });
+
+    for (let i = 1; i < zs.length; i++) {
+      expect(zs[i]).toBeGreaterThan(zs[i - 1]);
+    }
+    expect(zs[0]).toBe(baseZ);
+    expect(zs[zs.length - 1]).toBeCloseTo(baseZ + 220, 5);
+
+    // Past the full-pull point, it holds at the max instead of continuing
+    // to push the camera further back.
     scene.onProgress?.(1);
     scene.update(1 / 60, ctx);
     expect(ctx.camera.position.z).toBeCloseTo(baseZ + 220, 5);
 
-    // A quarter of the way through the view's span is already most of the
-    // way pulled back (easeOutExpo front-loads the motion) — not merely a
-    // quarter of the way, confirming this isn't a linear ramp.
-    scene.onProgress?.(0.25);
+    scene.dispose();
+  });
+
+  it("H1: a top-pinned, full-viewport section (rect.top 0, height === viewportH) has rest progress ≈ 0.5, not 0", () => {
+    // Locks the 0.5-vs-0 assumption down so it can't silently regress: with
+    // the default fixture's rect (top:0, height:600) and viewport
+    // (size.height:600), progress just BELOW 0.5 must still read as fully
+    // at-rest (pull 0) and progress just ABOVE 0.5 must already show
+    // measurable pull — which only holds if restProgress is actually ~0.5
+    // here, not 0.
+    const scene = createHeroCanScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const baseZ = ctx.camera.position.z;
+
+    expect(DEFAULT_REST_PROGRESS).toBeCloseTo(0.5, 5);
+
+    scene.onProgress?.(0.4);
     scene.update(1 / 60, ctx);
-    expect(ctx.camera.position.z).toBeCloseTo(baseZ + expectedCameraPull(0.25), 5);
-    expect(ctx.camera.position.z).toBeGreaterThan(baseZ + 220 * 0.9);
+    expect(ctx.camera.position.z).toBe(baseZ); // still below rest -> no pull
+
+    scene.onProgress?.(0.5);
+    scene.update(1 / 60, ctx);
+    expect(ctx.camera.position.z).toBe(baseZ); // exactly at rest -> no pull
+
+    scene.onProgress?.(0.51);
+    scene.update(1 / 60, ctx);
+    expect(ctx.camera.position.z).toBeGreaterThan(baseZ); // just above rest -> pull begins
 
     scene.dispose();
   });

@@ -86,8 +86,14 @@ export const damp: (a: number, b: number, lambda: number, dt: number) => number;
 export const clamp: (v: number, min: number, max: number) => number;
 export const mapRange: (v: number, inMin: number, inMax: number, outMin: number, outMax: number, clampOut?: boolean) => number;
 export const easeOutExpo: (t: number) => number; // + easeInOutCubic, easeOutBack
+export const smoothstep: (t: number) => number;  // clamped Hermite 3t²-2t³
+export const springStep: (pos: number, vel: number, target: number, stiffness: number, damping: number, dt: number) => { pos: number; vel: number };
 ```
-`damp` is THE smoothing primitive (frame-rate independent).
+`damp` is THE smoothing primitive (frame-rate independent). `springStep` (a
+semi-implicit Euler integrator) moved here from `core/pointer.ts` in v0.2.1.0 —
+it is a pure numeric primitive, and living next to `PointerTracker` meant any
+worker-safe caller had to import a module that binds `window` just to get it.
+`core/pointer.ts` re-exports it, so existing importers are unaffected.
 
 ### core/scroll.ts + core/normalize-wheel.ts — HYBRID scroll
 Real document height. `window.scrollY` canonical. Only wheel intercepted
@@ -140,9 +146,13 @@ export class RectTracker {
 (`RectData {top,left,width,height}`) for the worker protocol.
 
 ### core/pointer.ts
-Normalized viewport + per-view NDC position; velocity via damp; plus a pure
-exported spring integrator (semi-implicit Euler:
-`springStep(pos, vel, target, stiffness, damping, dt)`).
+Normalized viewport + per-view NDC position; velocity via damp; plus the pure
+`viewNDC(clientX, clientY, rect, scrollY)` helper that maps a client-pixel
+position into a view's NDC space. The spring integrator
+`springStep(pos, vel, target, stiffness, damping, dt)` now lives in
+`core/math.ts` (v0.2.1.0) and is re-exported here for compatibility — import it
+from `core/math.ts` in worker-safe code, since this module binds `window` and
+registers DOM listeners.
 
 ### core/reduced-motion.ts
 matchMedia + change listener; injectable initial value for tests.
@@ -328,7 +338,12 @@ export function createRenderHost(): RenderHost; // feature-detects OffscreenCanv
   color/opacity/outline/glow uniforms; glow feeds bloom). Sized in the
   1-unit=1px convention; positioned over TrackedRect of an invisible DOM
   headline (`.sr-visible-hidden` keeps SR/a11y complete).
-- Used by: hero headline, particles title, picker flavor names.
+  `GlTextOptions.opacity` (0..1, default 1) seeds the `uOpacity` uniform and
+  `setOpacity(v)` changes it at runtime (v0.2.1.0) — this is what lets a scene
+  render GL type as a dim backdrop watermark instead of a full-strength
+  headline competing with the DOM copy.
+- Used by: hero backdrop watermark, particles caption, picker flavor
+  nameplates.
 
 ### react/ bindings
 - **EngineProvider.tsx** (`"use client"`): renders `<GlCanvas/>` (fixed,
@@ -371,9 +386,9 @@ satire for the Mateína can ("Powered by AI*  ·  *Argentine Ingenuity").
 
 | # | Section | Scene requirements |
 |---|---|---|
-| 1 | Hero | Procedural can (LatheGeometry profile from `components/svg/Can.tsx` 200×480 proportions; label CanvasTexture from `lib/flavors.ts` mint palette; PMREM RoomEnvironment lid). MSDF headline "SMOOTH LIFT. ZERO CRASH." with bloom glow. Idle spin + damped pointer tilt; scroll pulls camera back. |
-| 2 | Exploded | Can decomposes (lid/tab/shell/label/3 leaf planes) on ONE `Timeline`; `onProgress(p)` → `tl.sample(p)`; leader lines anchor to DOM copy rects. Scrubs both directions. |
-| 3 | Particles | Curl-noise energy/steam via gpgpu ping-pong; counts 128²/256²/512² by tier; additive + bloom; scroll drives flow + forest→lemon ramp; MSDF section title. |
+| 1 | Hero | Procedural can (LatheGeometry profile from `components/svg/Can.tsx` 200×480 proportions; label CanvasTexture from `lib/flavors.ts` mint palette; PMREM RoomEnvironment lid). MSDF type "SMOOTH LIFT. ZERO CRASH." renders as a low-opacity backdrop watermark pushed behind the can (v0.2.1.0 — it used to duplicate the DOM headline at full strength and poke out around the product). Idle spin + damped pointer tilt; scroll pulls the camera back across the hero's own span. |
+| 2 | Exploded | Can decomposes (lid/tab/shell/label/3 leaf planes) on ONE `Timeline`; `onProgress(p)` → `tl.sample(p)`; leader lines anchor to DOM copy rects. Scrubs both directions. v0.2.1.0 re-keyed the timing: dead zones at both ends (`EXPLODE_DEADZONE_START/END`) hold the can assembled while the section enters and fully apart before it leaves, so the decomposition plays out across the readable middle, eased rather than linear; leader lines fade in on their own window (`LEADER_LINE_FADE_IN_START/END`) after the parts have cleared each other. |
+| 3 | Particles | Curl-noise energy/steam via gpgpu ping-pong; counts 128²/256²/512² by tier; additive + bloom; scroll drives flow + forest→lemon ramp; MSDF caption behind the DOM `<h2>` that owns the words. |
 | 4 | Pointer field | ~300 InstancedMesh leaves/berries (colors from `decor`), spring integrators, pointer-velocity shove, raycast click impulse; touch = move impulses. |
 | 5 | Splat lounge | `synthesizeCanScene()` splat set rendered by SplatMesh; scroll orbits camera (photoreal moment); HUD shows splat count + sortMs. Also accepts `?splat=<url>` to load an external `.splat`/`.ply`. |
 | 6 | Picker | 5 flavor cans (reuse can-geometry + label-texture per flavor) on drag/arrow-key carousel; real DOM buttons; GL clear-region lerps to `flavor.bg`; MSDF flavor name; DOM panel (framer-motion) shows tagline. Selection flows via `invoke(viewId,"select",[i])`. |

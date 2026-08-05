@@ -18,10 +18,13 @@ feature-shaped, touches Stage/scenes/provider, needs its own tests.
 
 ### Visual taste iteration
 **Priority:** P3
-Splat lounge still reads abstract (tighten splat scale range / camera path);
-picker "Raspberry Yuzu" pill collides with a can at 1440px; GL echo headline
-partially hides behind the hero can. Pure art-direction iteration via
-screenshot loops.
+Mostly resolved by /design-review on feat/motion-polish (2026-08-03): GL echo
+headline is now a deliberate backdrop watermark behind the hero can, splat
+lounge haze/scale/label-mix retuned so the can-on-table diorama reads, and
+can materials brightened (metalness-without-envmap fix). Remaining: picker
+"Raspberry Yuzu" pill still shows a side can through its transparent pill
+background at 1440px (cosmetic), and the splat can's front face could still
+be lighter. Pure art-direction iteration via screenshot loops.
 
 ### Hot-path allocation pass
 **Priority:** P3

@@ -65,3 +65,13 @@ export function easeOutBack(t: number): number {
   const c3 = c1 + 1;
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 }
+
+/**
+ * Classic Hermite smoothstep: eases both ends of [0,1] to zero velocity
+ * (`3t²-2t³`), clamping `t` into [0,1] first so out-of-range input degrades
+ * to a flat 0/1 plateau instead of extrapolating past it.
+ */
+export function smoothstep(t: number): number {
+  const c = clamp(t, 0, 1);
+  return c * c * (3 - 2 * c);
+}

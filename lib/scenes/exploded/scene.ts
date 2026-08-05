@@ -31,6 +31,7 @@
 
 import * as THREE from "three";
 import type { RectData, SceneModule, ViewContext } from "@/lib/engine/types";
+import { easeInOutCubic, mapRange, smoothstep } from "@/lib/engine/core/math";
 import { Timeline } from "@/lib/engine/gl/timeline";
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
 import { decor, flavorById, flavors } from "@/lib/flavors";
@@ -115,6 +116,26 @@ const LEAF_COLORS: Record<LeafKey, string> = {
 
 const LEADER_LINE_COLOR = 0xf9f9ee; // brand.cream
 const LEADER_LINE_BASE_OPACITY = 0.7;
+
+// Motion-audit fix C1: the explosion used to run linearly across the FULL
+// 0..1 view-progress span, so the can was already mid-explode the instant
+// this section entered view and only half-exploded at center (the section's
+// most readable moment) — no assembled "before" state and no fully-exploded
+// "after" state to read against. Re-keyed with a dead zone on both ends
+// (assembled through the first quarter while the section is still entering,
+// fully exploded by the last quarter before it exits) so the decomposition
+// itself plays out through the readable middle, eased rather than linear so
+// velocity ramps up/down instead of starting/stopping instantly.
+export const EXPLODE_DEADZONE_START = 0.25;
+export const EXPLODE_DEADZONE_END = 0.75;
+
+// Motion-audit fix N7: leader-line opacity used to be `0.7 * p` raw — a
+// straight-line fade across the whole span, so the lines were already
+// partway visible before the parts had meaningfully separated. Windowed so
+// they arrive as a deliberate beat AFTER the explosion is underway (parts
+// have cleared each other) and are fully on well before center.
+export const LEADER_LINE_FADE_IN_START = 0.35;
+export const LEADER_LINE_FADE_IN_END = 0.6;
 
 /** A simple bezier lens/leaf silhouette, pointed along +Y, centered at origin. */
 function createLeafGeometry(length: number, width: number): THREE.ShapeGeometry {
@@ -228,16 +249,16 @@ class ExplodedScene implements SceneModule {
       const target = EXPLODE_TARGETS[key];
       if (!tracked) continue;
       tl.add(tracked.delta, "y", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.y },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.y, ease: easeInOutCubic },
       ]);
       tl.add(tracked.delta, "rotX", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.rotX },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.rotX, ease: easeInOutCubic },
       ]);
       tl.add(tracked.delta, "rotZ", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.rotZ },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.rotZ, ease: easeInOutCubic },
       ]);
     }
     return tl;
@@ -269,7 +290,10 @@ class ExplodedScene implements SceneModule {
 
   private updateLeaderLines(p: number): void {
     if (this.leaderMaterial) {
-      this.leaderMaterial.opacity = LEADER_LINE_BASE_OPACITY * p;
+      const fadeIn = smoothstep(
+        mapRange(p, LEADER_LINE_FADE_IN_START, LEADER_LINE_FADE_IN_END, 0, 1, true)
+      );
+      this.leaderMaterial.opacity = LEADER_LINE_BASE_OPACITY * fadeIn;
     }
 
     const worldPos = new THREE.Vector3();

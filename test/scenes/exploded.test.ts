@@ -37,7 +37,14 @@ vi.mock("@/lib/scenes/hero-can/can-geometry", () => ({
 }));
 
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
-import createExplodedScene, { EXPLODE_TARGETS } from "@/lib/scenes/exploded/scene";
+import createExplodedScene, {
+  EXPLODE_DEADZONE_END,
+  EXPLODE_DEADZONE_START,
+  EXPLODE_TARGETS,
+  LEADER_LINE_FADE_IN_END,
+  LEADER_LINE_FADE_IN_START,
+} from "@/lib/scenes/exploded/scene";
+import { easeInOutCubic } from "@/lib/engine/core/math";
 
 function makeCtx(overrides: Partial<ViewContext> = {}): ViewContext {
   return {
@@ -76,27 +83,62 @@ beforeEach(() => {
   vi.mocked(buildCan).mockClear();
 });
 
-describe("exploded scene — Timeline-driven positions at fixed progress", () => {
-  it("lands the lid/tab/label at exactly base + p*target at p=0, 0.5, 1", () => {
+describe("exploded scene — Timeline-driven positions at fixed progress (C1: dead zone + eased middle)", () => {
+  it("stays fully assembled through the entry dead zone (p=0..0.25)", () => {
     const scene = createExplodedScene();
     const ctx = makeCtx();
     scene.init(ctx);
     const { lid, tab, label } = latestBuilt().parts;
 
-    scene.onProgress?.(0);
-    expect(lid.position.y).toBe(0);
-    expect(tab.rotation.z).toBe(0);
-    expect(label.rotation.z).toBe(0);
+    for (const p of [0, 0.1, EXPLODE_DEADZONE_START]) {
+      scene.onProgress?.(p);
+      expect(lid.position.y).toBe(0);
+      expect(tab.rotation.z).toBe(0);
+      expect(label.rotation.z).toBe(0);
+    }
 
+    scene.dispose();
+  });
+
+  it("is fully exploded through the exit dead zone (p=0.75..1)", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const { lid, tab, label } = latestBuilt().parts;
+
+    for (const p of [EXPLODE_DEADZONE_END, 0.9, 1]) {
+      scene.onProgress?.(p);
+      expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y);
+      expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ);
+      expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ);
+    }
+
+    scene.dispose();
+  });
+
+  it("eases (not linearly interpolates) through the readable middle, matching easeInOutCubic exactly", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const { lid, tab, label } = latestBuilt().parts;
+
+    // p=0.5 sits at the midpoint of the [0.25, 0.75] dead-zone window ->
+    // localT=0.5, and easeInOutCubic(0.5) is exactly 0.5, so this point
+    // coincidentally matches a linear half-explode — verified separately at
+    // an off-center point (p=0.4) below where linear and eased diverge.
     scene.onProgress?.(0.5);
     expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y * 0.5);
-    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ * 0.5);
-    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ * 0.5);
 
-    scene.onProgress?.(1);
-    expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y);
-    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ);
-    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ);
+    const localT = (0.4 - EXPLODE_DEADZONE_START) / (EXPLODE_DEADZONE_END - EXPLODE_DEADZONE_START);
+    const eased = easeInOutCubic(localT);
+    scene.onProgress?.(0.4);
+    expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y * eased);
+    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ * eased);
+    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ * eased);
+    // Sanity: eased progress at p=0.4 (localT=0.3) is behind a naive linear
+    // 0.3 fraction — ease-in-out starts slow, confirming this isn't secretly
+    // still linear.
+    expect(eased).toBeLessThan(localT);
 
     scene.dispose();
   });
@@ -175,8 +217,8 @@ describe("exploded scene — scrub both directions", () => {
   });
 });
 
-describe("exploded scene — leader lines", () => {
-  it("fades leader-line opacity in proportion to progress and lays out a 3-point elbow", () => {
+describe("exploded scene — leader lines (N7: windowed smoothstep fade-in)", () => {
+  it("stays invisible before the fade-in window and fully on after it", () => {
     const scene = createExplodedScene();
     const ctx = makeCtx();
     scene.init(ctx);
@@ -188,11 +230,41 @@ describe("exploded scene — leader lines", () => {
     scene.onProgress?.(0);
     expect(material.opacity).toBeCloseTo(0);
 
+    scene.onProgress?.(LEADER_LINE_FADE_IN_START);
+    expect(material.opacity).toBeCloseTo(0);
+
+    scene.onProgress?.(LEADER_LINE_FADE_IN_END);
+    expect(material.opacity).toBeCloseTo(0.7);
+
     scene.onProgress?.(1);
     expect(material.opacity).toBeCloseTo(0.7);
 
     const positions = lines[0]!.geometry.getAttribute("position") as THREE.BufferAttribute;
     expect(positions.count).toBe(3); // 2-segment elbow == 3 points
+
+    scene.dispose();
+  });
+
+  it("arrives as a deliberate beat AFTER the explosion is underway, not a straight-line fade across the whole span", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const lines = ctx.scene.children.filter((o): o is THREE.Line => o instanceof THREE.Line);
+    const material = lines[0]!.material as THREE.LineBasicMaterial;
+
+    // Midpoint of the fade window: smoothstep(0.5) is exactly 0.5, so
+    // opacity here is exactly half of the base 0.7 — unlike the old raw
+    // `0.7 * p` behavior, which would already be well past that at p=0.475.
+    const mid = (LEADER_LINE_FADE_IN_START + LEADER_LINE_FADE_IN_END) / 2;
+    scene.onProgress?.(mid);
+    expect(material.opacity).toBeCloseTo(0.35);
+
+    // A point still inside the explosion's own dead zone (p=0.2, parts
+    // haven't started separating yet) must show zero leader-line opacity —
+    // confirms the lines don't preempt the explosion.
+    scene.onProgress?.(0.2);
+    expect(material.opacity).toBeCloseTo(0);
 
     scene.dispose();
   });

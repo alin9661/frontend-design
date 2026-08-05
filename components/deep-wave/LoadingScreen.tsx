@@ -51,7 +51,19 @@ export default function LoadingScreen() {
             className="h-1 w-48 overflow-hidden rounded-full bg-cream/20"
             aria-hidden="true"
           >
-            <div className="h-full bg-cream" style={{ width: `${clamped}%` }} />
+            {/* Motion-audit fix P1: was `width: ${clamped}%` with no
+                transition — every ASSET_PROGRESS tick snapped the bar to its
+                new width instantly (a layout-affecting property besides),
+                reading as steps/thrash rather than a fill. Scaling
+                `transform` instead is compositor-only (no layout) and gets a
+                real transition, so the bar glides between progress ticks. */}
+            <div
+              className="h-full w-full origin-left bg-cream"
+              style={{
+                transform: `scaleX(${clamped / 100})`,
+                transition: "transform 200ms ease-out",
+              }}
+            />
           </div>
           <p className="font-body text-sm text-cream/60">{Math.round(clamped)}%</p>
         </motion.div>

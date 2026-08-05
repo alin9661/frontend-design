@@ -153,6 +153,24 @@ describe("synthesizeCanScene", () => {
     expect(Array.from(a.positions.subarray(0, 300))).toEqual(Array.from(b.positions.subarray(0, 300)));
   });
 
+  it("ambient puffs stay genuinely translucent (F-004 regression: alpha ≤ 30, never the old near-solid stacking)", () => {
+    // Regression (design-review F-004): puffs at alpha 60 × 3000 splats per
+    // volume compounded to near-solid dark blobs that swallowed the can.
+    // Every splat must be either fully opaque subject/table (255) or true
+    // haze (≤ 30); a middle band means the optical-depth budget regressed.
+    const data = synthesizeCanScene({ seed: 1 });
+    let hazeCount = 0;
+    for (let i = 0; i < data.count; i++) {
+      const alpha = data.colors[i * 4 + 3]!;
+      if (alpha === 255) continue;
+      expect(alpha).toBeLessThanOrEqual(30);
+      hazeCount++;
+    }
+    // The haze layer exists but is sparse relative to the subject.
+    expect(hazeCount).toBeGreaterThan(0);
+    expect(hazeCount).toBeLessThan(data.count * 0.1);
+  });
+
   it("varies color across the cloud (not a single flat swatch)", () => {
     const data = synthesizeCanScene({ seed: 1 });
     const distinctColors = new Set<string>();

@@ -266,15 +266,23 @@ function buildTableGeometry(): THREE.PlaneGeometry {
   return geo;
 }
 
-/** A handful of soft, low-density "ambient puff" volumes floating around the can — an icosphere per puff, sampled sparsely with heavy jitter for a diffuse look rather than a hard-edged ball. */
+/** A handful of soft, low-density "ambient puff" volumes floating around the
+ * can — an icosphere per puff, sampled sparsely with heavy jitter for a
+ * diffuse look rather than a hard-edged ball.
+ *
+ * Distance tuning (design-review F-004): at the original CAN_RADIUS·2.6
+ * base offset the puff volumes sat between the orbit camera and the can for
+ * most of the orbit, and (combined with the old 3000-splat density — see
+ * synthesizeCanScene) rendered as opaque dark-green lobes that swallowed the
+ * whole diorama. Pushed out past the table edge so they frame the subject. */
 function buildPuffGeometries(rng: Rng): THREE.BufferGeometry[] {
   const puffs: THREE.BufferGeometry[] = [];
   const PUFF_COUNT = 6;
   for (let i = 0; i < PUFF_COUNT; i++) {
-    const radius = 40 + rng() * 60;
+    const radius = 50 + rng() * 60;
     const geo = new THREE.IcosahedronGeometry(radius, 1);
     const angle = (i / PUFF_COUNT) * Math.PI * 2 + rng() * 0.5;
-    const dist = CAN_RADIUS * 2.6 + rng() * 140;
+    const dist = CAN_RADIUS * 4.2 + rng() * 160;
     geo.translate(
       Math.cos(angle) * dist,
       CAN_HEIGHT * (0.2 + rng() * 0.6),
@@ -327,9 +335,13 @@ export function synthesizeCanScene(opts: SynthesizeCanSceneOptions = {}): SplatD
     }
     // Front-facing band (a rough "label" without a texture): darken toward
     // the accent color when the normal faces the default camera (+Z-ish).
+    // Mix weights tuned down (design-review F-004): at 0.7 the whole
+    // camera-facing half of the can went near-solid accent (#14574A), so
+    // the subject read as a black cylinder — the seafoam body must stay
+    // the dominant read, with the accent as a tint.
     const facing = THREE.MathUtils.clamp(normal.z * 0.5 + 0.5, 0, 1);
     const isLabelBand = heightT > 0.18 && heightT < 0.72;
-    const mixT = isLabelBand ? facing * 0.7 : facing * 0.15;
+    const mixT = isLabelBand ? facing * 0.45 : facing * 0.08;
     const c = PALETTE.canBody.clone().lerp(PALETTE.canAccent, mixT);
     return [c.r * 255, c.g * 255, c.b * 255, 255];
   };
@@ -345,7 +357,13 @@ export function synthesizeCanScene(opts: SynthesizeCanSceneOptions = {}): SplatD
     PALETTE.puff.r * 255,
     PALETTE.puff.g * 255,
     PALETTE.puff.b * 255,
-    60, // translucent — ambient haze, not solid geometry
+    // Design-review F-004: was 60 — individually translucent, but with 3000
+    // splats per puff dozens of them stacked along every ray, compounding
+    // to a near-solid dark blob (1-(1-0.24)^20 ≈ 1). Alpha and per-puff
+    // density (below) must be read TOGETHER as the haze's optical depth:
+    // 350 splats × alpha 14/255 leaves ~50% transmission through a puff's
+    // core — background stays readable through every puff.
+    14,
   ];
 
   const can = synthesizeFromGeometry(buildCanGeometry(), {
@@ -367,8 +385,10 @@ export function synthesizeCanScene(opts: SynthesizeCanSceneOptions = {}): SplatD
   const puffGeometries = buildPuffGeometries(rng);
   const puffs = puffGeometries.map((geo, i) =>
     synthesizeFromGeometry(geo, {
-      count: 3000,
-      scaleRange: [4, 14],
+      // 350 bigger, fainter splats per puff (was 3000 × [4,14] @ alpha 60):
+      // reads as actual haze instead of cauliflower — see puffColorFn note.
+      count: 350,
+      scaleRange: [10, 24],
       colorFn: puffColorFn,
       jitter: 0.8,
       seed: seed + 100 + i,

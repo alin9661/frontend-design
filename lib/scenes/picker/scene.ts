@@ -42,6 +42,18 @@ const KEY_LIGHT_INTENSITY = 1.8;
  * confirming 0.22 still let the selected (CENTER_SCALE-enlarged) can clip
  * the "Raspberry Yuzu" pill at 1440px. */
 const RING_X_OFFSET_FACTOR = 0.3;
+/**
+ * Fraction of the view's own CSS height the nameplate sits below center
+ * (H3 fix). This used to be a flat `y = -300` — "below the settled can's
+ * bottom rim (can height 480, center y=0 → bottom -240)" per the F-001
+ * comment, but that margin was computed for one assumed ("tall") viewport
+ * height and never revisited per-view, so a SHORT viewport could already
+ * put it near/past the frustum edge. 0.6 reproduces the original -300
+ * exactly at this scene's long-standing test fixture height (500 — see
+ * test/scenes/picker-nameplate.test.ts), while now tracking the view's
+ * actual height instead of assuming one.
+ */
+const NAMEPLATE_Y_FACTOR = 0.6;
 
 interface CanEntry {
   index: number;
@@ -173,10 +185,14 @@ class PickerScene implements SceneModule {
         // carousel column (same x offset as ringGroup), below the settled
         // can's bottom rim (can height 480, center y=0 → bottom -240) —
         // it used to float at view center where it duplicated the DOM
-        // flavor heading in the copy column.
+        // flavor heading in the copy column. Positioned once here from
+        // whatever ctx this init()/font-load happened to see (H3: if a
+        // resize lands in between, this can be transiently stale — the
+        // NEXT `applyFrame(ctx)` call, same as `ringGroup`'s own x, always
+        // corrects it from the live ctx).
         this.flavorText.object3d.position.set(
           ctx.rect.width * RING_X_OFFSET_FACTOR,
-          -300,
+          -ctx.rect.height * NAMEPLATE_Y_FACTOR,
           40
         );
         this.root?.add(this.flavorText.object3d);
@@ -226,7 +242,19 @@ class PickerScene implements SceneModule {
   private applyFrame(ctx?: ViewContext): void {
     if (!this.root || !this.ringGroup) return;
     this.ringGroup.rotation.y = this.carousel.angle;
-    if (ctx) this.ringGroup.position.x = ctx.rect.width * RING_X_OFFSET_FACTOR;
+    if (ctx) {
+      this.ringGroup.position.x = ctx.rect.width * RING_X_OFFSET_FACTOR;
+      // H3 fix: this used to only be set once, inside loadFont().then()'s
+      // init-time ctx closure — so unlike ringGroup's own x (recomputed
+      // from the live ctx every frame, right above), a resize after init
+      // moved the ring but left the nameplate parked at its stale x/y,
+      // breaking this comment's own promise ("same x offset as ringGroup").
+      // Now tracked here every frame, same as the ring.
+      if (this.flavorText) {
+        this.flavorText.object3d.position.x = ctx.rect.width * RING_X_OFFSET_FACTOR;
+        this.flavorText.object3d.position.y = -ctx.rect.height * NAMEPLATE_Y_FACTOR;
+      }
+    }
     for (const can of this.cans) {
       can.group.scale.setScalar(this.carousel.scaleFor(can.index));
     }

@@ -2,20 +2,31 @@
 //
 // Pure, framework-agnostic carousel state machine for the picker scene
 // (docs/deep-wave-engine-design.md §5 row 6): angle-per-flavor placement
-// math, damped rotation toward a selected flavor, damped centered-can
-// scale-up, and damped background-tint color — all as plain numbers, with
-// zero dependency on three/hero-can/gl-text. This is what actually makes
-// the picker testable: scene.ts (which DOES import the can/text contracts
-// per docs/deep-wave-engine-design.md, and so can't be resolved by Vitest
-// until those land — see this workstream's notes) is a thin wiring layer
-// over this class, so all the interesting logic lands here where it can be
+// math, spring-integrated rotation toward a selected flavor, a
+// smoothstep-eased centered-can scale-up, and damped background-tint color
+// (B1: rotation and scale stopped being `damp()`-based when N8 replaced
+// rotation with a spring and reworked the scale falloff — see
+// `integrateAngleSpring` and `scaleForAngularOffset` below; color is still
+// genuinely `damp()`-driven) — all as plain numbers, with zero dependency on
+// three/hero-can/gl-text. This is what actually makes the picker testable:
+// scene.ts (which DOES import the can/text contracts per
+// docs/deep-wave-engine-design.md, and so can't be resolved by Vitest until
+// those land — see this workstream's notes) is a thin wiring layer over this
+// class, so all the interesting logic lands here where it can be
 // unit-tested today.
 //
 // Follows gl/'s layering law (§3): no document/window/react/three imports —
-// worker-safe.
+// worker-safe. (H4: this used to import `springStep` from
+// `core/pointer.ts`, which binds `window`/registers DOM listeners — that
+// made the claim above literally false, even though nothing evaluated at
+// module scope so the worker didn't actually break. `integrateAngleSpring`
+// below now inlines the same semi-implicit-Euler math directly instead of
+// calling the shared `core/math.ts` `springStep` helper — partly to restore
+// this file's own worker-safety independent of where `springStep` lives,
+// partly for C1's allocation-free sub-stepping. See core/math.ts's
+// `springStep` for the canonical, tested version of this integrator.)
 
 import { damp, smoothstep } from "@/lib/engine/core/math";
-import { springStep } from "@/lib/engine/core/pointer";
 
 export const TWO_PI = Math.PI * 2;
 
@@ -23,24 +34,40 @@ export const TWO_PI = Math.PI * 2;
  * Motion-audit fix N8: rotation used to converge via `damp()` (exponential
  * decay) — maximum velocity right at the click, then a long, slowly-decaying
  * creep tail as it approached the target. Replaced with a critically-damped-
- * ish spring (`springStep`, see core/pointer.ts) for an accelerate-then-
- * settle feel instead: starts at rest, ramps up, eases into the target
- * rather than crawling up to it asymptotically forever.
+ * ish spring (see `integrateAngleSpring` below, and core/math.ts's
+ * `springStep` for the canonical integrator it inlines) for an
+ * accelerate-then-settle feel instead: starts at rest, ramps up, eases into
+ * the target rather than crawling up to it asymptotically forever.
  */
 export const CAROUSEL_STIFFNESS = 110;
 export const CAROUSEL_DAMPING = 17;
 /** Background-tint convergence rate (unchanged — see core/math's `damp`). */
 export const BG_LAMBDA = 6;
 
-/** `springStep` is an explicit-ish (semi-implicit Euler) integrator, unlike
- * `damp`'s exact-for-any-dt exponential — stepping it directly with a large
- * `dt` (e.g. a single very slow/janky frame) can be numerically unstable at
- * this stiffness. Sub-stepping at a small fixed cap keeps it both stable and
- * close to frame-rate independent, the property `damp` gave us for free. */
-const SPRING_SUBSTEP_MAX = 1 / 1000;
+/**
+ * C1 fix: was `1 / 1000` — a semi-implicit Euler integrator (like the one
+ * this sub-steps) is stable at a given step size roughly up to
+ * `2 / omega_n`, and at `CAROUSEL_STIFFNESS` 110 (`omega_n = sqrt(stiffness)
+ * ≈ 10.5 rad/s`) that's well past a single 64ms frame (the engine's own
+ * `MAX_DT_S` clamp, worker/frame-shared.ts) — so 1ms sub-stepping was ~17x
+ * finer than the stability requirement actually needs, costing ~17
+ * allocation-free-now-but-previously-allocating iterations every frame even
+ * once the carousel had settled. Raised to `1/240` (~4.17ms): still far
+ * inside the stable range, ~4x fewer iterations per frame. */
+const SPRING_SUBSTEP_MAX = 1 / 240;
+/** C1 fix: the sub-step loop used to be bounded only by the CALLER's
+ * MAX_DT_S clamp (worker/frame-shared.ts), not by itself — this makes
+ * `integrateAngleSpring` own its bound regardless of caller, so an
+ * unexpectedly large `dt` (a multi-second stall, a hand-rolled test) still
+ * degrades to a coarser (but per SPRING_SUBSTEP_MAX's comment, still
+ * numerically stable) sub-step size instead of the loop itself growing
+ * unbounded. */
+const MAX_SUBSTEPS = 64;
 /** Below these thresholds the spring is close enough to rest that residual
  * (sub-visible) float jitter would otherwise linger indefinitely — snap to
- * the exact target instead of asymptotically approaching it forever. */
+ * the exact target instead of asymptotically approaching it forever. Also
+ * used by `converged()` (H2) to mean "actually at rest", not just
+ * "momentarily passing through the target". */
 const ANGLE_SETTLE_EPSILON = 1e-4; // rad
 const ANGLE_VELOCITY_SETTLE_EPSILON = 1e-3; // rad/s
 
@@ -48,7 +75,16 @@ const ANGLE_VELOCITY_SETTLE_EPSILON = 1e-3; // rad/s
  * over `dt`, internally sub-stepping so large `dt` values stay stable and
  * (approximately) frame-rate independent. Snaps to `target` (zero velocity)
  * once both position error and velocity are below their settle epsilons, so
- * the carousel doesn't oscillate/creep forever at tiny deltas. */
+ * the carousel doesn't oscillate/creep forever at tiny deltas.
+ *
+ * C1 fix: early-outs before the loop when already at rest (PickerScene.update
+ * calls `carousel.step(dt)` every frame for the view's whole lifetime, so a
+ * long-settled carousel used to still pay for a sub-stepped loop — and its
+ * per-substep `{pos,vel}` allocation — every frame forever). The loop itself
+ * now integrates two local scalars directly (the same semi-implicit-Euler
+ * math as core/math.ts's `springStep`) instead of calling it, so it stays
+ * allocation-free per sub-step too — only the final returned object
+ * allocates. */
 function integrateAngleSpring(
   pos: number,
   vel: number,
@@ -57,14 +93,18 @@ function integrateAngleSpring(
   damping: number,
   dt: number
 ): { pos: number; vel: number } {
-  const steps = Math.max(1, Math.ceil(dt / SPRING_SUBSTEP_MAX));
+  if (Math.abs(target - pos) < ANGLE_SETTLE_EPSILON && Math.abs(vel) < ANGLE_VELOCITY_SETTLE_EPSILON) {
+    return { pos: target, vel: 0 };
+  }
+
+  const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dt / SPRING_SUBSTEP_MAX)));
   const subDt = dt / steps;
   let p = pos;
   let v = vel;
   for (let i = 0; i < steps; i++) {
-    const next = springStep(p, v, target, stiffness, damping, subDt);
-    p = next.pos;
-    v = next.vel;
+    const force = (target - p) * stiffness - v * damping;
+    v = v + force * subDt;
+    p = p + v * subDt;
   }
   if (Math.abs(target - p) < ANGLE_SETTLE_EPSILON && Math.abs(v) < ANGLE_VELOCITY_SETTLE_EPSILON) {
     return { pos: target, vel: 0 };
@@ -72,7 +112,8 @@ function integrateAngleSpring(
   return { pos: p, vel: v };
 }
 
-/** Centered can scale (damped toward); flanking cans damp toward `SIDE_SCALE`. */
+/** Centered can scale, eased (smoothstep) as angular offset from front grows;
+ * flanking cans ease the same way toward `SIDE_SCALE`. */
 // Was 1.35 — trimmed slightly alongside scene.ts's RING_X_OFFSET_FACTOR
 // after visually confirming the larger front can clipped the flavor-pill
 // row at 1440px.
@@ -153,9 +194,9 @@ export function hexToRgb(hex: string): RGB {
 }
 
 export interface PickerCarouselOptions {
-  /** Rotation spring stiffness (see core/pointer.ts's `springStep`). */
+  /** Rotation spring stiffness (see core/math.ts's `springStep`). */
   stiffness?: number;
-  /** Rotation spring damping (see core/pointer.ts's `springStep`). */
+  /** Rotation spring damping (see core/math.ts's `springStep`). */
   damping?: number;
   bgLambda?: number;
   initialIndex?: number;
@@ -200,7 +241,7 @@ export class PickerCarousel {
     return this._selectedIndex;
   }
 
-  /** Current damped carousel rotation, radians. */
+  /** Current spring-integrated carousel rotation, radians. */
   get angle(): number {
     return this._currentAngle;
   }
@@ -261,9 +302,23 @@ export class PickerCarousel {
     return scaleForAngularOffset(effective, this.count);
   }
 
-  /** True once rotation and color have both damped within `epsilon` of their targets. */
+  /**
+   * True once color has damped within `epsilon` of its target AND rotation
+   * is actually AT REST there — both position within `epsilon` of the
+   * target and velocity below `ANGLE_VELOCITY_SETTLE_EPSILON`.
+   *
+   * H2 fix: `damp()`'s exponential approach is monotonic, so a
+   * position-only check was sound for it — but rotation is a spring now
+   * (N8), and at `CAROUSEL_STIFFNESS`/`CAROUSEL_DAMPING`'s default ratio
+   * (ζ ≈ 0.81, underdamped) it overshoots and crosses the target at full
+   * speed before settling. A position-only check reported "converged" at
+   * that crossing, mid-flight. The velocity term restores "converged" to
+   * actually meaning "at rest".
+   */
   converged(epsilon: number = 1e-3): boolean {
-    const angleClose = Math.abs(wrapAngle(this._targetAngle - this._currentAngle)) < epsilon;
+    const angleClose =
+      Math.abs(wrapAngle(this._targetAngle - this._currentAngle)) < epsilon &&
+      Math.abs(this._angleVel) < ANGLE_VELOCITY_SETTLE_EPSILON;
     const bgClose =
       Math.abs(this._targetBg.r - this._currentBg.r) < epsilon &&
       Math.abs(this._targetBg.g - this._currentBg.g) < epsilon &&
@@ -273,9 +328,9 @@ export class PickerCarousel {
 
   /**
    * Picks whichever of `_targetAngle`, `_targetAngle + 2π`, `_targetAngle - 2π`
-   * is numerically closest to `_currentAngle` — so damping always takes the
-   * short way around the carousel instead of unwrapping the long way when
-   * e.g. selecting index 0 from index (count-1).
+   * is numerically closest to `_currentAngle` — so the rotation spring
+   * always takes the short way around the carousel instead of unwrapping
+   * the long way when e.g. selecting index 0 from index (count-1).
    */
   private nearestEquivalentTarget(): number {
     const delta = wrapAngle(this._targetAngle - this._currentAngle);

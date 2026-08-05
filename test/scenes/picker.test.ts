@@ -220,7 +220,14 @@ describe("PickerCarousel — damped centering converges", () => {
     big.step(0.5);
     for (let i = 0; i < 50; i++) small.step(0.01);
 
-    expect(big.angle).toBeCloseTo(small.angle, 3);
+    // C1: SPRING_SUBSTEP_MAX was raised 1/1000 -> 1/240 (still far inside
+    // the integrator's stable range at CAROUSEL_STIFFNESS/DAMPING — see
+    // carousel.ts's comment on the constant), trading some of this
+    // "frame-rate independence" precision for ~4x fewer sub-steps per
+    // frame. A quarter-radian-scale rotation now landing within ~0.01 rad
+    // (well under half a degree, imperceptible) of the fine-grained
+    // reference is the intended precision/perf tradeoff, not a regression.
+    expect(Math.abs(big.angle - small.angle)).toBeLessThan(0.01);
   });
 
   it("takes the short way around the carousel (never unwraps the long way for a wrap-around selection)", () => {
@@ -271,6 +278,53 @@ describe("PickerCarousel — damped centering converges", () => {
     expect(secondTickDelta).toBeGreaterThan(afterFirstTick);
   });
 
+  it("N8: sub-steps a large dt, so one janky frame integrates the same as many small ones", () => {
+    // springStep is a semi-implicit Euler integrator, unlike damp()'s
+    // exact-for-any-dt exponential — a single 250ms step at stiffness 110
+    // would blow up without internal sub-stepping. Both carousels below
+    // cover the same 250ms, so they must land close to the same place.
+    const oneBigFrame = new PickerCarousel(FLAVOR_BGS);
+    const manySmallFrames = new PickerCarousel(FLAVOR_BGS);
+    oneBigFrame.select(2);
+    manySmallFrames.select(2);
+
+    oneBigFrame.step(0.25);
+    for (let i = 0; i < 25; i++) manySmallFrames.step(0.01);
+
+    expect(Number.isFinite(oneBigFrame.angle)).toBe(true);
+    // C1: SPRING_SUBSTEP_MAX was raised 1/1000 -> 1/240 (see carousel.ts's
+    // comment on the constant for why that's still well inside the
+    // integrator's stable range) — coarser sub-stepping means this landing
+    // spot is close, not bit-for-bit identical, to the fine-grained
+    // reference. `toBeCloseTo(...,4)` (0.00005 rad) was calibrated for the
+    // old 1ms sub-step; loosened to a still-tiny 0.005 rad (under a third
+    // of a degree) for the new, intentionally coarser one.
+    expect(Math.abs(oneBigFrame.angle - manySmallFrames.angle)).toBeLessThan(0.005);
+
+    // And it still converges from there rather than oscillating forever.
+    for (let i = 0; i < 20; i++) oneBigFrame.step(0.25);
+    expect(oneBigFrame.converged()).toBe(true);
+  });
+
+  it("a custom damping changes the settle character (very underdamped overshoots; overdamped never does)", () => {
+    const target = wrapAngle(targetRotationForIndex(2, FLAVOR_BGS.length));
+    const overshoots = (damping: number): boolean => {
+      const carousel = new PickerCarousel(FLAVOR_BGS, { stiffness: 110, damping });
+      carousel.select(2);
+      const initialSign = Math.sign(wrapAngle(target - carousel.angle));
+      for (let i = 0; i < 180; i++) {
+        carousel.step(1 / 60);
+        const error = wrapAngle(target - carousel.angle);
+        // Crossing the target flips the sign of the remaining error.
+        if (Math.sign(error) === -initialSign && Math.abs(error) > 1e-3) return true;
+      }
+      return false;
+    };
+
+    expect(overshoots(2)).toBe(true); // ζ ≈ 0.1 — visibly bouncy
+    expect(overshoots(40)).toBe(false); // ζ ≈ 1.9 — overdamped, crawls in
+  });
+
   it("N8 regression: settles at rest without residual oscillation for a tiny delta", () => {
     // Regression guard for the settle-threshold snap: a near-converged
     // carousel re-selecting its OWN already-centered flavor must not jitter
@@ -283,6 +337,93 @@ describe("PickerCarousel — damped centering converges", () => {
     for (let i = 0; i < 10; i++) carousel.step(1 / 60);
     expect(carousel.converged()).toBe(true);
     expect(carousel.angle).toBeCloseTo(wrapAngle(targetRotationForIndex(1, 5)), 6);
+  });
+
+  it("C1: step(0) is a no-op", () => {
+    const carousel = new PickerCarousel(FLAVOR_BGS);
+    carousel.select(2);
+    carousel.step(1 / 60); // get it moving, mid-flight (not settled)
+    const angleBefore = carousel.angle;
+    const bgBefore = { ...carousel.bg };
+
+    carousel.step(0);
+
+    expect(carousel.angle).toBe(angleBefore);
+    expect(carousel.bg).toEqual(bgBefore);
+  });
+
+  it("C1 regression: once settled, further step() calls leave the angle exactly unchanged (early-out at rest)", () => {
+    // Before C1's early-out, a settled carousel still ran the sub-step loop
+    // (and its per-substep allocation) every frame forever — functionally
+    // harmless (a converged spring stays converged) but wasteful. This
+    // pins the early-out's OWN correctness: once at rest, `pos`/`vel` must
+    // come back bit-for-bit identical, not just "close", since the guard
+    // returns `{ pos: target, vel: 0 }` directly instead of re-integrating.
+    const carousel = new PickerCarousel(FLAVOR_BGS);
+    carousel.select(2);
+    for (let i = 0; i < 300; i++) carousel.step(1 / 60);
+    expect(carousel.converged()).toBe(true);
+    const settledAngle = carousel.angle;
+
+    for (let i = 0; i < 50; i++) carousel.step(1 / 60);
+    expect(carousel.angle).toBe(settledAngle);
+  });
+
+  it("C1 regression: a single large-dt stall (0.5s) stays finite and lands close to the same elapsed time taken in tiny steps", () => {
+    // Before C1's MAX_SUBSTEPS cap, the sub-step loop was bounded only by
+    // the CALLER's MAX_DT_S clamp (worker/frame-shared.ts) — nothing in
+    // this function itself stopped an unusually large dt (a genuine stall,
+    // or a test/host that doesn't clamp) from sub-stepping without bound.
+    // This drives a 0.5s stall directly into step() as a single call.
+    const stalled = new PickerCarousel(FLAVOR_BGS);
+    const reference = new PickerCarousel(FLAVOR_BGS);
+    stalled.select(2);
+    reference.select(2);
+
+    stalled.step(0.5);
+    for (let i = 0; i < 500; i++) reference.step(0.001);
+
+    expect(Number.isFinite(stalled.angle)).toBe(true);
+    expect(Math.abs(stalled.angle - reference.angle)).toBeLessThan(0.015);
+  });
+
+  it("H2 regression: converged() is false while the (underdamped) rotation spring is crossing the target at speed, true once actually at rest", () => {
+    // CAROUSEL_STIFFNESS 110 / CAROUSEL_DAMPING 17 gives ζ ≈ 0.81 —
+    // underdamped, so the rotation spring overshoots and crosses the
+    // target before settling. Pre-fix, `converged()` checked position
+    // only, so it read `true` at that crossing (velocity still large).
+    // bgLambda is cranked way up so color convergence (a real, separate
+    // AND-ed condition of `converged()`) is already done well before the
+    // crossing — isolating the assertion to the angle/velocity term H2
+    // actually changed. Without that isolation, `bgClose` alone would
+    // already be false this early regardless of the fix, and the test
+    // wouldn't distinguish pre- from post-fix behavior.
+    const carousel = new PickerCarousel(FLAVOR_BGS, { bgLambda: 500 });
+    const target = wrapAngle(targetRotationForIndex(2, FLAVOR_BGS.length));
+    carousel.select(2);
+
+    // Fine-grained scan (2ms steps) for the FIRST frame where position lands
+    // within the default epsilon of the target — for an initially-monotonic
+    // underdamped approach, that first crossing is a fast-moving instant,
+    // not the eventual settle (which comes later, after the overshoot).
+    const dt = 1 / 500;
+    let foundCrossing = false;
+    for (let i = 0; i < 5000 && !foundCrossing; i++) {
+      carousel.step(dt);
+      const error = Math.abs(wrapAngle(target - carousel.angle));
+      if (error < 1e-3) {
+        foundCrossing = true;
+      }
+    }
+    expect(foundCrossing).toBe(true); // sanity: this stiffness/damping does cross close enough to matter
+    // At the crossing, position is within epsilon of the target but
+    // velocity is still large — not actually at rest. This assertion would
+    // FAIL against the pre-fix, position-only `converged()` (which would
+    // read `true` here, since position alone is already within epsilon).
+    expect(carousel.converged()).toBe(false);
+
+    for (let i = 0; i < 300; i++) carousel.step(1 / 60);
+    expect(carousel.converged()).toBe(true);
   });
 });
 
@@ -398,6 +539,25 @@ describe("picker scene.ts — SceneModule contract, end to end", () => {
     ) as THREE.Group | undefined;
     expect(ringGroup).toBeDefined();
     expect(ringGroup!.children.length).toBeGreaterThanOrEqual(flavors.length);
+
+    scene.dispose();
+  });
+
+  it("lights the cans brightly enough for the label colors to reach their authored values (F-005 regression)", async () => {
+    // Regression (design-review F-005): at ambient 0.65 / key 1.4 the
+    // standard-material cans read olive/brown against the bright flavor
+    // background — the authored label colors never arrived.
+    const scene = createPickerScene();
+    const ctx = makeViewContext();
+    await scene.init(ctx);
+
+    const root = ctx.scene.children[0] as THREE.Group;
+    const ambient = root.children.find((c) => c instanceof THREE.AmbientLight) as THREE.AmbientLight;
+    const key = root.children.find((c) => c instanceof THREE.DirectionalLight) as THREE.DirectionalLight;
+
+    expect(ambient.intensity).toBeCloseTo(0.95);
+    expect(key.intensity).toBeCloseTo(1.8);
+    expect(key.position.toArray()).toEqual([1.2, 1.6, 1.4]);
 
     scene.dispose();
   });

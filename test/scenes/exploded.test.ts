@@ -270,6 +270,101 @@ describe("exploded scene — leader lines (N7: windowed smoothstep fade-in)", ()
   });
 });
 
+describe("exploded scene — legibility rig (F-002)", () => {
+  it("builds the can with a real printed label texture, and owns disposing it", () => {
+    // Regression (design-review F-002): without a labelTexture, buildCan's
+    // label band falls back to solid `flavor.accent` — for mint a near-black
+    // slab against this section's dark background.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const opts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture } | undefined;
+    expect(opts?.labelTexture).toBeInstanceOf(THREE.Texture);
+
+    // The scene created the texture, so its dispose() must be chained onto
+    // the can's own — buildCan never disposes a caller-supplied texture.
+    const textureDispose = vi.spyOn(opts!.labelTexture!, "dispose");
+    scene.dispose();
+    expect(textureDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("F3 regression: also disposes the previous instance's label texture on re-init (context-loss restore), not just on dispose()", () => {
+    // init() re-runs by calling this.dispose() first (context-loss restore
+    // contract — see this file's "is re-runnable" test below), which is
+    // what should chain into the label texture's own dispose(). Only
+    // BufferGeometry/Material disposal was ever spied in the "dispose
+    // bookkeeping" suite below, so dropping the texture dispose from
+    // canDispose would stay green there — this pins it directly, on the
+    // re-init path specifically (dispose() alone is already covered by the
+    // test just above).
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const firstOpts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture };
+    const firstTexture = firstOpts.labelTexture!;
+    const firstTextureDispose = vi.spyOn(firstTexture, "dispose");
+
+    scene.init(ctx); // simulate context-loss restore re-running init on the SAME instance
+
+    expect(firstTextureDispose).toHaveBeenCalledTimes(1);
+
+    scene.dispose();
+  });
+
+  it("H5 regression: sizes the label texture down from createLabelTexture's default (this can renders small and mostly disassembled)", () => {
+    // Pre-fix, this called `createLabelTexture(flavor)` with no size options
+    // — the full 1024x2048 default, byte-identical to hero-can's own
+    // full-size texture for the same mint flavor (~8.4MB RGBA each, picker
+    // adds five more full-size ones on top). This assertion would FAIL
+    // against that pre-fix code: the canvas would be 1024x2048, not smaller.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const opts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture } | undefined;
+    const canvas = opts?.labelTexture?.image as { width: number; height: number };
+    expect(canvas.width).toBeLessThan(1024);
+    expect(canvas.height).toBeLessThan(2048);
+    expect(canvas.width).toBe(512);
+    expect(canvas.height).toBe(1024);
+
+    scene.dispose();
+  });
+
+  it("lights the assembly with ambient + a camera-side key + a cool rim from behind-left, and removes all three on dispose", () => {
+    // Regression (design-review F-002): at the old ambient 0.5 / key 1.0
+    // from (1,1,1), mint's label sat too close in value to the forest
+    // background and the assembly read as a black silhouette.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const lights = ctx.scene.children.filter((o): o is THREE.Light => o instanceof THREE.Light);
+    expect(lights).toHaveLength(3);
+
+    const ambient = lights.find((l) => l instanceof THREE.AmbientLight)!;
+    expect(ambient.intensity).toBeCloseTo(0.75);
+
+    const directionals = lights.filter(
+      (l): l is THREE.DirectionalLight => l instanceof THREE.DirectionalLight
+    );
+    const key = directionals.find((l) => l.color.getHex() === 0xffffff)!;
+    expect(key.intensity).toBeCloseTo(1.5);
+    expect(key.position.z).toBeGreaterThan(0); // pulled toward the camera
+
+    const rim = directionals.find((l) => l.color.getHex() !== 0xffffff)!;
+    expect(rim.color.getHex()).toBe(0xcfe8dd); // cool, to cut the silhouette off the bg
+    expect(rim.intensity).toBeCloseTo(0.9);
+    expect(rim.position.x).toBeLessThan(0); // behind-left
+    expect(rim.position.z).toBeLessThan(0);
+
+    scene.dispose();
+    expect(ctx.scene.children.filter((o) => o instanceof THREE.Light)).toHaveLength(0);
+  });
+});
+
 describe("exploded scene — dispose bookkeeping", () => {
   it("frees every geometry/material it created and detaches everything from the scene", () => {
     const geometryDisposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, "dispose");

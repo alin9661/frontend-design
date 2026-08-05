@@ -79,6 +79,23 @@ describe("GlText", () => {
     expect(material.uniforms.uOpacity!.value).toBeCloseTo(0.9);
   });
 
+  it("F3: a caller-supplied opacity of 0 is honoured, in the constructor AND via setOpacity", () => {
+    // The implementation defaults opacity with `opts.opacity ?? 1` precisely
+    // so an explicit 0 (fully transparent, a legitimate GL text state — e.g.
+    // fading a headline out) is preserved, not silently promoted to 1. 0 is
+    // the one input where `??` and `||` diverge (`0 || 1` is `1`; `0 ?? 1`
+    // is `0`), and it was untested — this pins both entry points against
+    // ever regressing to `||`.
+    const glText = new GlText(fixtureFont(), { text: "A", fontSize: 10, opacity: 0 });
+    const material = meshOf(glText).material as THREE.ShaderMaterial;
+    expect(material.uniforms.uOpacity!.value).toBe(0);
+
+    glText.setOpacity(0.6);
+    expect(material.uniforms.uOpacity!.value).toBeCloseTo(0.6);
+    glText.setOpacity(0);
+    expect(material.uniforms.uOpacity!.value).toBe(0);
+  });
+
   it("setText rebuilds the InstancedMesh (new geometry, updated count) and disposes the old geometry", () => {
     const glText = new GlText(fixtureFont(), { text: "A", fontSize: 10 });
     const firstMesh = meshOf(glText);

@@ -38,6 +38,7 @@ vi.mock("@/lib/engine/gl/text", () => ({
   }),
 }));
 
+import { GlText } from "@/lib/engine/gl/text";
 import createParticlesScene, {
   PARTICLE_GRID_SIZE,
   gridSizeForQuality,
@@ -212,6 +213,25 @@ describe("particles scene — lifecycle", () => {
 
     scene.update(0.25, ctx);
     expect(material.uniforms.uTime!.value).toBeCloseTo(0.75);
+
+    scene.dispose();
+  });
+
+  it("F-001 regression: the GL title is a softened caption riding the emitter column, not a full-strength duplicate at view center", async () => {
+    // Regression (design-review F-001): the title rendered at full opacity
+    // at x=0 — the view's center — planting it on top of SectionParticles'
+    // DOM <h2> in the left copy column. It now captions the plume instead.
+    const scene = createParticlesScene();
+    const ctx = makeCtx();
+    await scene.init(ctx);
+
+    const opts = vi.mocked(GlText).mock.calls[0]![1] as { opacity?: number };
+    expect(opts.opacity).toBeCloseTo(0.55); // the DOM <h2> still owns the words
+
+    const title = glTextInstances[0]!.object3d;
+    expect(title.position.x).not.toBe(0); // no longer parked on the DOM headline
+    expect(title.position.x).toBeCloseTo(ctx.rect.width * 0.22); // EMITTER_X_OFFSET_FACTOR
+    expect(title.position.y).toBeGreaterThan(0); // above the plume crest
 
     scene.dispose();
   });

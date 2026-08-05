@@ -120,13 +120,16 @@ const LEADER_LINE_BASE_OPACITY = 0.7;
 
 // Motion-audit fix C1: the explosion used to run linearly across the FULL
 // 0..1 view-progress span, so the can was already mid-explode the instant
-// this section entered view and only half-exploded at center (the section's
-// most readable moment) — no assembled "before" state and no fully-exploded
-// "after" state to read against. Re-keyed with a dead zone on both ends
-// (assembled through the first quarter while the section is still entering,
-// fully exploded by the last quarter before it exits) so the decomposition
-// itself plays out through the readable middle, eased rather than linear so
-// velocity ramps up/down instead of starting/stopping instantly.
+// this section entered view — no assembled "before" state and no
+// fully-exploded "after" state to read against. (B3: `easeInOutCubic(0.5) =
+// 0.5`, so the can was ALSO still exactly half-exploded at center either way
+// — that part didn't change. The actual defect this fixed was the missing
+// assembled/fully-exploded rest states at the section's entry/exit.)
+// Re-keyed with a dead zone on both ends (assembled through the first
+// quarter while the section is still entering, fully exploded by the last
+// quarter before it exits) so the decomposition itself plays out through the
+// readable middle, eased rather than linear so velocity ramps up/down
+// instead of starting/stopping instantly.
 export const EXPLODE_DEADZONE_START = 0.25;
 export const EXPLODE_DEADZONE_END = 0.75;
 
@@ -134,7 +137,10 @@ export const EXPLODE_DEADZONE_END = 0.75;
 // straight-line fade across the whole span, so the lines were already
 // partway visible before the parts had meaningfully separated. Windowed so
 // they arrive as a deliberate beat AFTER the explosion is underway (parts
-// have cleared each other) and are fully on well before center.
+// have cleared each other) and finish arriving just past center (view
+// progress 0 = enter-bottom, 1 = leave-top, so center is p=0.5 and this
+// window ends at 0.6 — a beat after the parts separate, landing the lines
+// just after the section's most readable moment, not before it).
 export const LEADER_LINE_FADE_IN_START = 0.35;
 export const LEADER_LINE_FADE_IN_END = 0.6;
 
@@ -188,7 +194,17 @@ class ExplodedScene implements SceneModule {
     // #14574A, a near-black slab that swallowed the whole part against this
     // section's dark background. The printed label also simply makes more
     // sense in the section whose copy is literally about the label.
-    const labelTexture = createLabelTexture(flavor);
+    //
+    // H5 fix: sized down from createLabelTexture's default (1024x2048,
+    // ~8.4MB RGBA/~11MB with mips) to a quarter of the pixel count. This
+    // can renders small and mostly disassembled here, and hero-can/scene.ts
+    // already builds a byte-identical full-size texture for the same mint
+    // flavor — full size on both was two ~8MB+ label textures alone (picker
+    // adds five more full-size ones on top, all live on the page at once).
+    // On MainThreadHost's no-OffscreenCanvas fallback this is also a
+    // synchronous Canvas2D draw during init, so smaller is cheaper there
+    // too.
+    const labelTexture = createLabelTexture(flavor, { width: 512, height: 1024 });
     const built = buildCan(flavor, { labelTexture });
     const group = built.group;
     this.group = group;

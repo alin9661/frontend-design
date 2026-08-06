@@ -37,7 +37,14 @@ vi.mock("@/lib/scenes/hero-can/can-geometry", () => ({
 }));
 
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
-import createExplodedScene, { EXPLODE_TARGETS } from "@/lib/scenes/exploded/scene";
+import createExplodedScene, {
+  EXPLODE_DEADZONE_END,
+  EXPLODE_DEADZONE_START,
+  EXPLODE_TARGETS,
+  LEADER_LINE_FADE_IN_END,
+  LEADER_LINE_FADE_IN_START,
+} from "@/lib/scenes/exploded/scene";
+import { easeInOutCubic } from "@/lib/engine/core/math";
 
 function makeCtx(overrides: Partial<ViewContext> = {}): ViewContext {
   return {
@@ -76,27 +83,62 @@ beforeEach(() => {
   vi.mocked(buildCan).mockClear();
 });
 
-describe("exploded scene — Timeline-driven positions at fixed progress", () => {
-  it("lands the lid/tab/label at exactly base + p*target at p=0, 0.5, 1", () => {
+describe("exploded scene — Timeline-driven positions at fixed progress (C1: dead zone + eased middle)", () => {
+  it("stays fully assembled through the entry dead zone (p=0..0.25)", () => {
     const scene = createExplodedScene();
     const ctx = makeCtx();
     scene.init(ctx);
     const { lid, tab, label } = latestBuilt().parts;
 
-    scene.onProgress?.(0);
-    expect(lid.position.y).toBe(0);
-    expect(tab.rotation.z).toBe(0);
-    expect(label.rotation.z).toBe(0);
+    for (const p of [0, 0.1, EXPLODE_DEADZONE_START]) {
+      scene.onProgress?.(p);
+      expect(lid.position.y).toBe(0);
+      expect(tab.rotation.z).toBe(0);
+      expect(label.rotation.z).toBe(0);
+    }
 
+    scene.dispose();
+  });
+
+  it("is fully exploded through the exit dead zone (p=0.75..1)", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const { lid, tab, label } = latestBuilt().parts;
+
+    for (const p of [EXPLODE_DEADZONE_END, 0.9, 1]) {
+      scene.onProgress?.(p);
+      expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y);
+      expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ);
+      expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ);
+    }
+
+    scene.dispose();
+  });
+
+  it("eases (not linearly interpolates) through the readable middle, matching easeInOutCubic exactly", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+    const { lid, tab, label } = latestBuilt().parts;
+
+    // p=0.5 sits at the midpoint of the [0.25, 0.75] dead-zone window ->
+    // localT=0.5, and easeInOutCubic(0.5) is exactly 0.5, so this point
+    // coincidentally matches a linear half-explode — verified separately at
+    // an off-center point (p=0.4) below where linear and eased diverge.
     scene.onProgress?.(0.5);
     expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y * 0.5);
-    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ * 0.5);
-    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ * 0.5);
 
-    scene.onProgress?.(1);
-    expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y);
-    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ);
-    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ);
+    const localT = (0.4 - EXPLODE_DEADZONE_START) / (EXPLODE_DEADZONE_END - EXPLODE_DEADZONE_START);
+    const eased = easeInOutCubic(localT);
+    scene.onProgress?.(0.4);
+    expect(lid.position.y).toBeCloseTo(EXPLODE_TARGETS.lid.y * eased);
+    expect(tab.rotation.z).toBeCloseTo(EXPLODE_TARGETS.tab.rotZ * eased);
+    expect(label.rotation.z).toBeCloseTo(EXPLODE_TARGETS.label.rotZ * eased);
+    // Sanity: eased progress at p=0.4 (localT=0.3) is behind a naive linear
+    // 0.3 fraction — ease-in-out starts slow, confirming this isn't secretly
+    // still linear.
+    expect(eased).toBeLessThan(localT);
 
     scene.dispose();
   });
@@ -175,8 +217,8 @@ describe("exploded scene — scrub both directions", () => {
   });
 });
 
-describe("exploded scene — leader lines", () => {
-  it("fades leader-line opacity in proportion to progress and lays out a 3-point elbow", () => {
+describe("exploded scene — leader lines (N7: windowed smoothstep fade-in)", () => {
+  it("stays invisible before the fade-in window and fully on after it", () => {
     const scene = createExplodedScene();
     const ctx = makeCtx();
     scene.init(ctx);
@@ -188,6 +230,12 @@ describe("exploded scene — leader lines", () => {
     scene.onProgress?.(0);
     expect(material.opacity).toBeCloseTo(0);
 
+    scene.onProgress?.(LEADER_LINE_FADE_IN_START);
+    expect(material.opacity).toBeCloseTo(0);
+
+    scene.onProgress?.(LEADER_LINE_FADE_IN_END);
+    expect(material.opacity).toBeCloseTo(0.7);
+
     scene.onProgress?.(1);
     expect(material.opacity).toBeCloseTo(0.7);
 
@@ -195,6 +243,125 @@ describe("exploded scene — leader lines", () => {
     expect(positions.count).toBe(3); // 2-segment elbow == 3 points
 
     scene.dispose();
+  });
+
+  it("arrives as a deliberate beat AFTER the explosion is underway, not a straight-line fade across the whole span", () => {
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const lines = ctx.scene.children.filter((o): o is THREE.Line => o instanceof THREE.Line);
+    const material = lines[0]!.material as THREE.LineBasicMaterial;
+
+    // Midpoint of the fade window: smoothstep(0.5) is exactly 0.5, so
+    // opacity here is exactly half of the base 0.7 — unlike the old raw
+    // `0.7 * p` behavior, which would already be well past that at p=0.475.
+    const mid = (LEADER_LINE_FADE_IN_START + LEADER_LINE_FADE_IN_END) / 2;
+    scene.onProgress?.(mid);
+    expect(material.opacity).toBeCloseTo(0.35);
+
+    // A point still inside the explosion's own dead zone (p=0.2, parts
+    // haven't started separating yet) must show zero leader-line opacity —
+    // confirms the lines don't preempt the explosion.
+    scene.onProgress?.(0.2);
+    expect(material.opacity).toBeCloseTo(0);
+
+    scene.dispose();
+  });
+});
+
+describe("exploded scene — legibility rig (F-002)", () => {
+  it("builds the can with a real printed label texture, and owns disposing it", () => {
+    // Regression (design-review F-002): without a labelTexture, buildCan's
+    // label band falls back to solid `flavor.accent` — for mint a near-black
+    // slab against this section's dark background.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const opts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture } | undefined;
+    expect(opts?.labelTexture).toBeInstanceOf(THREE.Texture);
+
+    // The scene created the texture, so its dispose() must be chained onto
+    // the can's own — buildCan never disposes a caller-supplied texture.
+    const textureDispose = vi.spyOn(opts!.labelTexture!, "dispose");
+    scene.dispose();
+    expect(textureDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("F3 regression: also disposes the previous instance's label texture on re-init (context-loss restore), not just on dispose()", () => {
+    // init() re-runs by calling this.dispose() first (context-loss restore
+    // contract — see this file's "is re-runnable" test below), which is
+    // what should chain into the label texture's own dispose(). Only
+    // BufferGeometry/Material disposal was ever spied in the "dispose
+    // bookkeeping" suite below, so dropping the texture dispose from
+    // canDispose would stay green there — this pins it directly, on the
+    // re-init path specifically (dispose() alone is already covered by the
+    // test just above).
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const firstOpts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture };
+    const firstTexture = firstOpts.labelTexture!;
+    const firstTextureDispose = vi.spyOn(firstTexture, "dispose");
+
+    scene.init(ctx); // simulate context-loss restore re-running init on the SAME instance
+
+    expect(firstTextureDispose).toHaveBeenCalledTimes(1);
+
+    scene.dispose();
+  });
+
+  it("H5 regression: sizes the label texture down from createLabelTexture's default (this can renders small and mostly disassembled)", () => {
+    // Pre-fix, this called `createLabelTexture(flavor)` with no size options
+    // — the full 1024x2048 default, byte-identical to hero-can's own
+    // full-size texture for the same mint flavor (~8.4MB RGBA each, picker
+    // adds five more full-size ones on top). This assertion would FAIL
+    // against that pre-fix code: the canvas would be 1024x2048, not smaller.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const opts = vi.mocked(buildCan).mock.calls[0]![1] as { labelTexture?: THREE.Texture } | undefined;
+    const canvas = opts?.labelTexture?.image as { width: number; height: number };
+    expect(canvas.width).toBeLessThan(1024);
+    expect(canvas.height).toBeLessThan(2048);
+    expect(canvas.width).toBe(512);
+    expect(canvas.height).toBe(1024);
+
+    scene.dispose();
+  });
+
+  it("lights the assembly with ambient + a camera-side key + a cool rim from behind-left, and removes all three on dispose", () => {
+    // Regression (design-review F-002): at the old ambient 0.5 / key 1.0
+    // from (1,1,1), mint's label sat too close in value to the forest
+    // background and the assembly read as a black silhouette.
+    const scene = createExplodedScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const lights = ctx.scene.children.filter((o): o is THREE.Light => o instanceof THREE.Light);
+    expect(lights).toHaveLength(3);
+
+    const ambient = lights.find((l) => l instanceof THREE.AmbientLight)!;
+    expect(ambient.intensity).toBeCloseTo(0.75);
+
+    const directionals = lights.filter(
+      (l): l is THREE.DirectionalLight => l instanceof THREE.DirectionalLight
+    );
+    const key = directionals.find((l) => l.color.getHex() === 0xffffff)!;
+    expect(key.intensity).toBeCloseTo(1.5);
+    expect(key.position.z).toBeGreaterThan(0); // pulled toward the camera
+
+    const rim = directionals.find((l) => l.color.getHex() !== 0xffffff)!;
+    expect(rim.color.getHex()).toBe(0xcfe8dd); // cool, to cut the silhouette off the bg
+    expect(rim.intensity).toBeCloseTo(0.9);
+    expect(rim.position.x).toBeLessThan(0); // behind-left
+    expect(rim.position.z).toBeLessThan(0);
+
+    scene.dispose();
+    expect(ctx.scene.children.filter((o) => o instanceof THREE.Light)).toHaveLength(0);
   });
 });
 

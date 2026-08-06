@@ -8,6 +8,7 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { decodeByteToUnit } from "@/lib/engine/gl/splats/formats";
 import {
+  CAN_RADIUS,
   mergeSplatData,
   synthesizeCanScene,
   synthesizeFromGeometry,
@@ -151,6 +152,74 @@ describe("synthesizeCanScene", () => {
     const b = synthesizeCanScene({ seed: 123 });
     expect(a.count).toBe(b.count);
     expect(Array.from(a.positions.subarray(0, 300))).toEqual(Array.from(b.positions.subarray(0, 300)));
+  });
+
+  it("ambient puffs stay genuinely translucent (F-004 regression: alpha ≤ 30, never the old near-solid stacking)", () => {
+    // Regression (design-review F-004): puffs at alpha 60 × 3000 splats per
+    // volume compounded to near-solid dark blobs that swallowed the can.
+    // Every splat must be either fully opaque subject/table (255) or true
+    // haze (≤ 30); a middle band means the optical-depth budget regressed.
+    const data = synthesizeCanScene({ seed: 1 });
+    let hazeCount = 0;
+    for (let i = 0; i < data.count; i++) {
+      const alpha = data.colors[i * 4 + 3]!;
+      if (alpha === 255) continue;
+      expect(alpha).toBeLessThanOrEqual(30);
+      hazeCount++;
+    }
+    // The haze layer exists but is sparse relative to the subject.
+    expect(hazeCount).toBeGreaterThan(0);
+    expect(hazeCount).toBeLessThan(data.count * 0.1);
+  });
+
+  it("keeps the seafoam can body the dominant read — the label band tints toward the accent, never past it (F-004 regression)", () => {
+    // Regression (design-review F-004): the label band mixed `facing * 0.7`
+    // toward canAccent (#14574A), so the whole camera-facing half of the can
+    // went near-solid accent and read as a black cylinder. Retuned to 0.45
+    // (band) / 0.08 (elsewhere), i.e. the body colour must always stay the
+    // dominant contributor.
+    const BODY_R = new THREE.Color("#7CC9B5").r * 255;
+    const ACCENT_R = new THREE.Color("#14574A").r * 255;
+    const data = synthesizeCanScene({ seed: 1 });
+
+    let maxMix = 0;
+    for (let i = 0; i < data.count; i++) {
+      if (data.colors[i * 4 + 3] !== 255) continue; // haze, not the subject
+      const r = data.colors[i * 4]!;
+      // The flat lid disc and the cream table use their own palette entries
+      // (both far lighter than the body), so they're not on the
+      // body->accent ramp this assertion measures.
+      if (r > BODY_R + 1) continue;
+      const mix = (r - BODY_R) / (ACCENT_R - BODY_R);
+      maxMix = Math.max(maxMix, mix);
+    }
+
+    // Never more than a 0.45 tint (+1 byte of quantisation slack); the old
+    // 0.7 weight would land here at ~0.7.
+    expect(maxMix).toBeLessThanOrEqual(0.47);
+    // ...but the label band is still a visible tint, not a no-op.
+    expect(maxMix).toBeGreaterThan(0.3);
+  });
+
+  it("scatters the haze sparsely and pushes it out past the table edge so it frames the can (F-004 regression)", () => {
+    // Regression (design-review F-004): 6 puffs × 3000 splats at a
+    // CAN_RADIUS*2.6 base offset sat between the orbit camera and the can.
+    // Retuned to 6 × 350 splats pushed out to CAN_RADIUS*4.2 + jitter.
+    const data = synthesizeCanScene({ seed: 1 });
+
+    const hazeRadii: number[] = [];
+    for (let i = 0; i < data.count; i++) {
+      if (data.colors[i * 4 + 3] === 255) continue;
+      hazeRadii.push(Math.hypot(data.positions[i * 3]!, data.positions[i * 3 + 2]!));
+    }
+
+    // 6 puffs × 350 splats — the density half of the optical-depth budget.
+    expect(hazeRadii.length).toBe(6 * 350);
+
+    const meanRadius = hazeRadii.reduce((sum, r) => sum + r, 0) / hazeRadii.length;
+    // Comfortably beyond the old CAN_RADIUS*2.6 base offset, which put the
+    // puffs between the camera and the subject for most of the orbit.
+    expect(meanRadius).toBeGreaterThan(CAN_RADIUS * 3.5);
   });
 
   it("varies color across the cloud (not a single flat swatch)", () => {

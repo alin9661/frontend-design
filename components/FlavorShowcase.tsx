@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useInView, useReducedMotion } from "framer-motion";
 import Can from "@/components/svg/Can";
 import { flavors } from "@/lib/flavors";
+import { CAN_SPRING, REVEAL, SWAP, SWAP_FAST } from "@/lib/motion";
 
 const AUTO_ADVANCE_MS = 4000;
 
@@ -83,14 +84,14 @@ export default function FlavorShowcase() {
         }
       }}
       animate={{ backgroundColor: active.bg }}
-      transition={{ duration: prefersReducedMotion ? 0 : 0.6, ease: "easeInOut" }}
+      transition={{ ...SWAP, duration: prefersReducedMotion ? 0 : SWAP.duration }}
       className="relative flex min-h-svh w-full flex-col items-center overflow-hidden px-6 py-20 md:py-28"
     >
       <motion.h2
         initial={{ y: 40, opacity: 0 }}
         whileInView={{ y: 0, opacity: 1 }}
         viewport={{ once: true, amount: 0.4 }}
-        transition={{ duration: 0.6, ease: "easeInOut" }}
+        transition={REVEAL}
         animate={{ color: active.ink }}
         className="font-display text-[clamp(2rem,6vw,4.5rem)] uppercase leading-[0.9] tracking-tight text-center"
       >
@@ -114,7 +115,7 @@ export default function FlavorShowcase() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 0.2 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: prefersReducedMotion ? 0.3 : 0.6, ease: "easeInOut" }}
+            transition={prefersReducedMotion ? SWAP_FAST : SWAP}
             style={{ color: active.ink }}
             className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 select-none text-center font-display text-[clamp(3rem,10vw,9rem)] uppercase leading-[0.9]"
           >
@@ -142,13 +143,18 @@ export default function FlavorShowcase() {
                       y: 0,
                       opacity: 1,
                       rotate: 0,
-                      transition: { type: "spring", stiffness: 220, damping: 18 },
+                      transition: CAN_SPRING,
                     }
               }
               exit={
                 prefersReducedMotion
-                  ? { opacity: 0, transition: { duration: 0.3 } }
-                  : { y: -40, opacity: 0, rotate: 6, transition: { duration: 0.25 } }
+                  ? { opacity: 0, transition: SWAP_FAST }
+                  : {
+                      y: -40,
+                      opacity: 0,
+                      rotate: 6,
+                      transition: SWAP_FAST,
+                    }
               }
               className="absolute inset-0 flex items-center justify-center drop-shadow-2xl"
             >
@@ -170,7 +176,7 @@ export default function FlavorShowcase() {
             initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: prefersReducedMotion ? 0 : -12 }}
-            transition={{ duration: 0.4 }}
+            transition={SWAP}
             style={{ color: active.ink }}
             className="absolute inset-x-0 top-0 text-center font-body text-lg md:text-xl"
           >
@@ -189,10 +195,10 @@ export default function FlavorShowcase() {
               aria-label={flavor.name}
               aria-pressed={isActive}
               onClick={() => selectFlavor(index)}
-              className="group relative flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-300 hover:scale-110"
+              className="group relative flex h-11 w-11 items-center justify-center rounded-full transition-transform duration-200 ease-out hover:scale-110"
             >
               <span
-                className="block h-7 w-7 rounded-full transition-[box-shadow] duration-[600ms] ease-in-out"
+                className="block h-7 w-7 rounded-full transition-[box-shadow] duration-200 ease-out"
                 style={{
                   backgroundColor: flavor.can,
                   // Every dot keeps a hairline ring so it never disappears

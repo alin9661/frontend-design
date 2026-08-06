@@ -211,20 +211,28 @@ export function buildCan(flavor: Flavor, opts: BuildCanOptions = {}): BuiltCan {
   const parts = createCanParts();
   const layout = getCanLayout();
 
+  // Metalness budget (design-review F-005): every consumer of buildCan
+  // (hero, exploded, picker) lights these cans WITHOUT an environment map —
+  // the PMREM job is a documented no-op under the current engine wiring.
+  // MeshStandardMaterial scales diffuse by (1 - metalness) and expects the
+  // envmap to give that energy back as reflections, so the old values
+  // (shell 0.35, lid 0.75, tab 0.85) silently discarded 35-85% of each
+  // part's color — the "muddy olive cans" finding. Keep metalness token-low
+  // until a real envmap ships.
   const shellMaterial = new THREE.MeshStandardMaterial({
     color: flavor.can,
-    metalness: 0.35,
-    roughness: 0.32,
+    metalness: 0.1,
+    roughness: 0.38,
   });
   const lidMaterial = new THREE.MeshStandardMaterial({
     color: 0xd8d8d2,
-    metalness: 0.75,
-    roughness: 0.25,
+    metalness: 0.4,
+    roughness: 0.3,
   });
   const tabMaterial = new THREE.MeshStandardMaterial({
     color: 0x9a9a94,
-    metalness: 0.85,
-    roughness: 0.3,
+    metalness: 0.45,
+    roughness: 0.35,
   });
   const labelMaterial = opts.labelTexture
     ? new THREE.MeshStandardMaterial({ map: opts.labelTexture, roughness: 0.42, metalness: 0.08 })

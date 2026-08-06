@@ -70,7 +70,7 @@
 
 import * as THREE from "three";
 import type { QualityTier, SceneModule, ViewContext } from "@/lib/engine/types";
-import { clamp, mapRange } from "@/lib/engine/core/math";
+import { clamp, mapRange, smoothstep } from "@/lib/engine/core/math";
 import { Gpgpu, type GpgpuRenderer } from "@/lib/engine/gl/gpgpu";
 import { simplex3d, curlNoise } from "@/lib/engine/gl/shaders/noise";
 import { loadFont, GlText } from "@/lib/engine/gl/text";
@@ -101,18 +101,32 @@ export function particleCountForQuality(tier: QualityTier): number {
 export const FLOW_COLOR_FOREST = new THREE.Color(0x1d423c);
 export const FLOW_COLOR_LEMON = new THREE.Color(0xf2c94c);
 
-/** Pure: scroll progress (0..1, clamped) -> the forest->lemon ramp color. */
+/**
+ * Pure: scroll progress (0..1, clamped) -> the forest->lemon ramp color.
+ *
+ * Motion-audit fix P4: `p` used to feed the lerp directly (linear), so the
+ * ramp started moving the instant progress ticked off 0 and kept moving
+ * right up to 1 — no settled moment at either section edge. Smoothstepping
+ * `p` first holds the forest/lemon endpoints for a beat at the edges and
+ * concentrates the actual color travel (and, in `flowSpeedForProgress`
+ * below, the speed change) through the middle of the span, eased in and
+ * out rather than at a constant rate throughout.
+ */
 export function colorRampForProgress(p: number): THREE.Color {
-  const t = clamp(p, 0, 1);
+  const t = smoothstep(clamp(p, 0, 1));
   return new THREE.Color().lerpColors(FLOW_COLOR_FOREST, FLOW_COLOR_LEMON, t);
 }
 
 export const BASE_FLOW_SPEED = 30; // local units/s at progress 0
 export const MAX_FLOW_SPEED = 110; // local units/s at progress 1
 
-/** Pure: scroll progress (0..1, clamped) -> rise speed, "scroll drives flow speed". */
+/** Pure: scroll progress (0..1, clamped) -> rise speed, "scroll drives flow
+ * speed" — smoothstepped for the same reason as `colorRampForProgress`
+ * above (P4): eases the speed change through the middle instead of ramping
+ * at a constant rate across the whole span. */
 export function flowSpeedForProgress(p: number): number {
-  return mapRange(clamp(p, 0, 1), 0, 1, BASE_FLOW_SPEED, MAX_FLOW_SPEED);
+  const t = smoothstep(clamp(p, 0, 1));
+  return mapRange(t, 0, 1, BASE_FLOW_SPEED, MAX_FLOW_SPEED);
 }
 
 const CURL_SCALE = 0.012;
@@ -128,6 +142,7 @@ const CURL_SCALE = 0.012;
 const BASE_POINT_SIZE = 8; // px at dpr 1, before "sized by DPR"
 const TITLE_TEXT = "ENERGY, RENDERED";
 const TITLE_FONT_SIZE = 42;
+const TITLE_OPACITY = 0.55; // caption strength — the DOM <h2> owns the words
 const FOREST_HEX = 0x1d423c;
 /** Shifts the particle column (not the section title, which stays over the
  * DOM headline it echoes) right of the copy/stats column — confirmed
@@ -274,8 +289,18 @@ class ParticlesScene implements SceneModule {
       color: FOREST_HEX,
       align: "center",
       glow: 0.4,
+      opacity: TITLE_OPACITY,
     });
-    this.text.object3d.position.set(0, riseHeight * 0.55 + TITLE_FONT_SIZE, 0);
+    // Caption the plume, don't duplicate the headline (design-review F-001):
+    // this used to sit at x=0 — the view's center — which planted it on top
+    // of SectionParticles' DOM <h2> in the left copy column. It now rides
+    // the emitter column (same X offset as the points cloud) as a softened
+    // caption above the plume crest.
+    this.text.object3d.position.set(
+      ctx.rect.width * EMITTER_X_OFFSET_FACTOR,
+      riseHeight * 0.55 + TITLE_FONT_SIZE,
+      0
+    );
     ctx.scene.add(this.text.object3d);
   }
 

@@ -241,6 +241,28 @@ describe("pointer-field SceneModule", () => {
     scene.dispose();
   });
 
+  it("instance materials never enable vertexColors, and per-instance colors are authored (F-003 regression)", () => {
+    // Regression (design-review F-003): `vertexColors: true` samples the
+    // geometry's per-vertex `color` attribute, which leaf/berry geometry
+    // doesn't have — a missing attribute reads (0,0,0) in WebGL, so every
+    // instance rendered as a black speck. Instance colors flow through
+    // `setColorAt`/`instanceColor` alone; the flag must stay off.
+    const scene = createPointerFieldScene();
+    const ctx = makeCtx();
+    scene.init(ctx);
+
+    const meshes = ctx.scene.children.filter((c) => c instanceof THREE.InstancedMesh) as THREE.InstancedMesh[];
+    expect(meshes).toHaveLength(2);
+    for (const mesh of meshes) {
+      const material = mesh.material as THREE.MeshBasicMaterial;
+      expect(material.vertexColors).toBe(false);
+      expect(mesh.geometry.getAttribute("color")).toBeUndefined();
+      expect(mesh.instanceColor).not.toBeNull();
+    }
+
+    scene.dispose();
+  });
+
   it("reducedMotion: update() does not move any instance (static grid)", () => {
     const scene = createPointerFieldScene();
     const ctx = makeCtx({ reducedMotion: true, pointer: { x: 0.8, y: 0.5, vx: 5, vy: 5, down: false, inside: true } });

@@ -3,6 +3,7 @@
 import { motion, useReducedMotion, useTransform } from "framer-motion";
 import ParallaxScene, { useParallax, PARALLAX_SHIFT_PX } from "@/components/ParallaxScene";
 import FloatingItem from "@/components/FloatingItem";
+import { CTA_SPRING, REVEAL } from "@/lib/motion";
 import Leaf from "@/components/svg/Leaf";
 import Citrus from "@/components/svg/Citrus";
 import Berry from "@/components/svg/Berry";
@@ -26,7 +27,12 @@ const item = {
   show: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] as const },
+    // D5 fix: was `{ ...REVEAL, duration: 0.7 }` — spreading the token then
+    // overriding the one field it standardizes defeats the point of having
+    // it. Hero's stacked eyebrow/headline/subcopy/CTA reveal is a regular
+    // (not oversized-wordmark-scale) entrance, so it stays on plain REVEAL
+    // rather than switching to REVEAL_SLOW — see that token's doc comment.
+    transition: REVEAL,
   },
 };
 
@@ -180,12 +186,20 @@ export default function Hero() {
             variants={item}
             className="mt-10 flex flex-col sm:flex-row items-center gap-6"
           >
-            <a
+            <motion.a
               href="#flavors"
-              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg transition-transform hover:scale-105 active:scale-95"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.97 }}
+              transition={CTA_SPRING}
+              // E1 fix: whileHover/whileTap give pointer users a spring, but
+              // switching off CSS hover/active classes left keyboard users
+              // with only the UA default ring on a `rounded-full` pill — an
+              // explicit focus-visible ring restores parity, in forest (this
+              // pill's own accent) against its cream background.
+              className="inline-flex items-center justify-center rounded-full bg-forest px-10 py-4 font-display uppercase tracking-wide text-cream text-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-forest"
             >
               SHOP THE FLAVORS
-            </a>
+            </motion.a>
             <a
               href="#benefits"
               className="font-body text-sm tracking-[0.15em] uppercase text-forest/80 underline underline-offset-4 decoration-forest/40 transition-colors hover:text-forest"

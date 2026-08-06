@@ -19,6 +19,19 @@ import { motion, useReducedMotion } from "framer-motion";
 import { flavors } from "@/lib/flavors";
 import { useView } from "@/lib/engine/react/useView";
 import { useEngine } from "@/lib/engine/react/useEngine";
+import { EASE_OUT, SWAP, SWAP_FAST } from "@/lib/motion";
+
+// Motion-audit fix P2: this used to claim `color 300ms ease` "matches" the
+// GL background's crossfade — it didn't. carousel.ts's `BG_LAMBDA` (6) damp
+// is exponential: it reaches ~95% of the way to its target at
+// t = -ln(0.05)/6 ≈ 0.4995s, i.e. ~500ms. D3 fix: hoisted out of the
+// component body (was re-allocated as a fresh string every render) and
+// derived from the shared `SWAP`/`EASE_OUT` tokens instead of a one-off
+// `450ms cubic-bezier(0.33, 1, 0.68, 1)` — SWAP's 500ms duration lands
+// CLOSER to that ~500ms GL settle point than 450ms did, and EASE_OUT's
+// decelerating curve still approximates the same "fast start, slow finish"
+// feel as the exponential damp.
+const INK_TRANSITION = `color ${SWAP.duration * 1000}ms cubic-bezier(${EASE_OUT.join(",")})`;
 
 export default function SectionPicker() {
   const [selectedId, setSelectedId] = useState(flavors[0]!.id);
@@ -40,9 +53,8 @@ export default function SectionPicker() {
   // copy was hardcoded cream, which is illegible (~1.4:1) against the
   // lighter flavor backgrounds (lemon/peach/mango) once the GL bg crossfades
   // to them, and only happened to work for the two dark flavors (mint,
-  // raspberry). The 300ms transition matches SectionPicker's GL bg crossfade
-  // (lib/scenes/picker/scene.ts's BG_LAMBDA-damped color) and the
-  // motion.div's own 0.3s tagline transition below.
+  // raspberry). See `INK_TRANSITION` (module scope, above) for the
+  // color-transition timing this drives.
   const inkMuted = `${selected.ink}cc`; // ~80% opacity (0xcc / 255 ≈ 0.8), matching the old `/80` utility
 
   return (
@@ -51,7 +63,7 @@ export default function SectionPicker() {
       id="picker"
       aria-labelledby="deep-wave-picker-heading"
       className="relative min-h-svh px-6 py-32"
-      style={{ color: selected.ink, transition: "color 300ms ease" }}
+      style={{ color: selected.ink, transition: INK_TRANSITION }}
     >
       {/* Background lives in its own negative-z layer so the shared GL
           canvas (fixed z-0, rendered before every section) shows through
@@ -69,7 +81,7 @@ export default function SectionPicker() {
         >
           Choose Your Lift.
         </h2>
-        <p className="mt-6 max-w-xl font-body text-lg" style={{ color: inkMuted, transition: "color 300ms ease" }}>
+        <p className="mt-6 max-w-xl font-body text-lg" style={{ color: inkMuted, transition: INK_TRANSITION }}>
           Five flavors. Zero AI input, despite the branding upstairs. Pick
           one — the can spins, the background answers, the AI takes no
           credit.
@@ -110,7 +122,7 @@ export default function SectionPicker() {
             key={selected.id}
             initial={reduceMotion ? undefined : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, ease: "easeOut" }}
+            transition={SWAP_FAST}
           >
             <p className="font-display uppercase text-2xl">{selected.name}</p>
             <p className="mt-2 max-w-md font-body" style={{ color: inkMuted }}>

@@ -2,18 +2,27 @@
 //
 // Pointer tracking (design doc §4, core/pointer.ts): a normalized
 // full-viewport position (`PointerState.x/y`, -1..1) with damped velocity,
-// plus two pure exported helpers gl/raycast.ts (and tests) can use without
-// a `PointerTracker` instance:
+// plus a pure exported helper gl/raycast.ts (and tests) can use without a
+// `PointerTracker` instance:
 //   - `viewNDC` — converts a raw client-pixel pointer position into a
 //     per-view NDC position (-1..1) given that view's document-space rect
 //     and the current scrollY, i.e. "where is the pointer inside THIS
 //     view's canvas region".
-//   - `springStep` — a semi-implicit-Euler spring integrator used by
-//     bespoke hover/impulse scenes (§5 "Pointer field").
+//
+// `springStep` (a semi-implicit-Euler spring integrator used by bespoke
+// hover/impulse scenes, §5 "Pointer field") used to live here too, but this
+// module binds `window` and registers DOM listeners (transitively importing
+// core/ticker.ts's rAF + `document.visibilitychange`) — not safe for
+// worker-safe callers to import just to get a pure numeric helper (H4 fix).
+// It now lives in ./math (alongside `damp`, the primitive it plays the same
+// role as) and is re-exported here so existing importers of
+// `core/pointer.ts`'s `springStep` keep working unchanged.
 
 import { Ticker, TickOrder } from "./ticker";
 import { damp } from "./math";
 import type { PointerState, RectData } from "../types";
+
+export { springStep } from "./math";
 
 export interface PointerTrackerOptions {
   el?: Window; // injectable for tests
@@ -106,21 +115,4 @@ export function viewNDC(clientX: number, clientY: number, rect: RectData, scroll
   const localX = rect.width !== 0 ? (clientX - rect.left) / rect.width : 0;
   const localY = rect.height !== 0 ? (clientY - viewportTop) / rect.height : 0;
   return { x: localX * 2 - 1, y: -(localY * 2 - 1) };
-}
-
-/** Semi-implicit Euler spring step: `vel` is updated from the spring force
- * first, then `pos` is advanced by the *new* velocity (more stable than
- * explicit Euler for typical stiffness/damping ranges). Pure. */
-export function springStep(
-  pos: number,
-  vel: number,
-  target: number,
-  stiffness: number,
-  damping: number,
-  dt: number
-): { pos: number; vel: number } {
-  const force = (target - pos) * stiffness - vel * damping;
-  const nextVel = vel + force * dt;
-  const nextPos = pos + nextVel * dt;
-  return { pos: nextPos, vel: nextVel };
 }

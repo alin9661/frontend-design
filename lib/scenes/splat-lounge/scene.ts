@@ -66,14 +66,21 @@ class SplatLoungeScene implements SceneModule {
         { t: 0, v: -Math.PI * 0.35 },
         { t: 1, v: Math.PI * 0.35, ease: easeInOutCubic },
       ])
+      // Motion-audit fix N6: `angle` was already eased, but `height` and
+      // `distance` were left linear — since the timeline applies each
+      // keyframe's `ease` to the SEGMENT ENDING at it, an un-eased `height`
+      // produced a velocity kink right at t=0.5 (the seam between its two
+      // linear segments), reading as a stutter mid-orbit even though angle
+      // and distance felt smooth. Every non-first keyframe now carries
+      // easeInOutCubic so all three tracks accelerate/decelerate in lockstep.
       .add(this.orbit, "height", [
         { t: 0, v: ORBIT_HEIGHT_START },
-        { t: 0.5, v: ORBIT_HEIGHT_MID },
-        { t: 1, v: ORBIT_HEIGHT_END },
+        { t: 0.5, v: ORBIT_HEIGHT_MID, ease: easeInOutCubic },
+        { t: 1, v: ORBIT_HEIGHT_END, ease: easeInOutCubic },
       ])
       .add(this.orbit, "distance", [
         { t: 0, v: ORBIT_DISTANCE_START },
-        { t: 1, v: ORBIT_DISTANCE_END },
+        { t: 1, v: ORBIT_DISTANCE_END, ease: easeInOutCubic },
       ]);
     this.timeline.sample(0);
     this.applyCamera(ctx.camera);

@@ -5,7 +5,16 @@
 // other core module (scroll.ts, pointer.ts) builds on.
 
 import { describe, expect, it } from "vitest";
-import { clamp, damp, easeInOutCubic, easeOutBack, easeOutExpo, lerp, mapRange } from "@/lib/engine/core/math";
+import {
+  clamp,
+  damp,
+  easeInOutCubic,
+  easeOutBack,
+  easeOutExpo,
+  lerp,
+  mapRange,
+  smoothstep,
+} from "@/lib/engine/core/math";
 
 describe("lerp", () => {
   it("returns a at t=0 and b at t=1", () => {
@@ -120,6 +129,26 @@ describe("easeInOutCubic", () => {
     const a = easeInOutCubic(0.25);
     const b = easeInOutCubic(0.75);
     expect(a + b).toBeCloseTo(1, 10);
+  });
+});
+
+describe("smoothstep", () => {
+  it("is 0 at t=0, 1 at t=1, and 0.5 exactly at the midpoint", () => {
+    expect(smoothstep(0)).toBe(0);
+    expect(smoothstep(1)).toBe(1);
+    expect(smoothstep(0.5)).toBeCloseTo(0.5, 10);
+  });
+
+  it("eases velocity at both ends (grows slower than linear near 0 and 1)", () => {
+    expect(smoothstep(0.1)).toBeLessThan(0.1);
+    expect(smoothstep(0.9)).toBeGreaterThan(0.9);
+  });
+
+  it("clamps below 0 to 0 and above 1 to 1 instead of extrapolating", () => {
+    expect(smoothstep(-0.5)).toBe(0);
+    expect(smoothstep(-5)).toBe(0);
+    expect(smoothstep(1.5)).toBe(1);
+    expect(smoothstep(5)).toBe(1);
   });
 });
 

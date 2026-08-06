@@ -31,8 +31,10 @@
 
 import * as THREE from "three";
 import type { RectData, SceneModule, ViewContext } from "@/lib/engine/types";
+import { easeInOutCubic, mapRange, smoothstep } from "@/lib/engine/core/math";
 import { Timeline } from "@/lib/engine/gl/timeline";
 import { buildCan } from "@/lib/scenes/hero-can/can-geometry";
+import { createLabelTexture } from "@/lib/scenes/hero-can/label-texture";
 import { decor, flavorById, flavors } from "@/lib/flavors";
 
 // Anatomy section isn't flavor-specific copy, so any can from the lineup
@@ -116,6 +118,32 @@ const LEAF_COLORS: Record<LeafKey, string> = {
 const LEADER_LINE_COLOR = 0xf9f9ee; // brand.cream
 const LEADER_LINE_BASE_OPACITY = 0.7;
 
+// Motion-audit fix C1: the explosion used to run linearly across the FULL
+// 0..1 view-progress span, so the can was already mid-explode the instant
+// this section entered view — no assembled "before" state and no
+// fully-exploded "after" state to read against. (B3: `easeInOutCubic(0.5) =
+// 0.5`, so the can was ALSO still exactly half-exploded at center either way
+// — that part didn't change. The actual defect this fixed was the missing
+// assembled/fully-exploded rest states at the section's entry/exit.)
+// Re-keyed with a dead zone on both ends (assembled through the first
+// quarter while the section is still entering, fully exploded by the last
+// quarter before it exits) so the decomposition itself plays out through the
+// readable middle, eased rather than linear so velocity ramps up/down
+// instead of starting/stopping instantly.
+export const EXPLODE_DEADZONE_START = 0.25;
+export const EXPLODE_DEADZONE_END = 0.75;
+
+// Motion-audit fix N7: leader-line opacity used to be `0.7 * p` raw — a
+// straight-line fade across the whole span, so the lines were already
+// partway visible before the parts had meaningfully separated. Windowed so
+// they arrive as a deliberate beat AFTER the explosion is underway (parts
+// have cleared each other) and finish arriving just past center (view
+// progress 0 = enter-bottom, 1 = leave-top, so center is p=0.5 and this
+// window ends at 0.6 — a beat after the parts separate, landing the lines
+// just after the section's most readable moment, not before it).
+export const LEADER_LINE_FADE_IN_START = 0.35;
+export const LEADER_LINE_FADE_IN_END = 0.6;
+
 /** A simple bezier lens/leaf silhouette, pointed along +Y, centered at origin. */
 function createLeafGeometry(length: number, width: number): THREE.ShapeGeometry {
   const shape = new THREE.Shape();
@@ -146,6 +174,7 @@ class ExplodedScene implements SceneModule {
 
   private ambient: THREE.AmbientLight | null = null;
   private directional: THREE.DirectionalLight | null = null;
+  private rim: THREE.DirectionalLight | null = null;
 
   private scene: THREE.Scene | null = null;
   private rect: RectData = { top: 0, left: 0, width: 0, height: 0 };
@@ -160,10 +189,30 @@ class ExplodedScene implements SceneModule {
     this.rect = ctx.rect;
 
     const flavor = flavors.find((f) => f.id === DEFAULT_FLAVOR_ID) ?? flavors[0]!;
-    const built = buildCan(flavor);
+    // Real label texture (design-review F-002): without one, buildCan's
+    // label band falls back to solid `flavor.accent` — for mint that's
+    // #14574A, a near-black slab that swallowed the whole part against this
+    // section's dark background. The printed label also simply makes more
+    // sense in the section whose copy is literally about the label.
+    //
+    // H5 fix: sized down from createLabelTexture's default (1024x2048,
+    // ~8.4MB RGBA/~11MB with mips) to a quarter of the pixel count. This
+    // can renders small and mostly disassembled here, and hero-can/scene.ts
+    // already builds a byte-identical full-size texture for the same mint
+    // flavor — full size on both was two ~8MB+ label textures alone (picker
+    // adds five more full-size ones on top, all live on the page at once).
+    // On MainThreadHost's no-OffscreenCanvas fallback this is also a
+    // synchronous Canvas2D draw during init, so smaller is cheaper there
+    // too.
+    const labelTexture = createLabelTexture(flavor, { width: 512, height: 1024 });
+    const built = buildCan(flavor, { labelTexture });
     const group = built.group;
     this.group = group;
-    this.canDispose = built.dispose;
+    const disposeBuilt = built.dispose;
+    this.canDispose = () => {
+      disposeBuilt();
+      labelTexture.dispose();
+    };
     group.position.x = ctx.rect.width * ASSEMBLY_X_OFFSET_FACTOR;
     ctx.scene.add(group);
 
@@ -187,10 +236,18 @@ class ExplodedScene implements SceneModule {
       this.registerPart(key, mesh);
     }
 
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.5);
-    this.directional = new THREE.DirectionalLight(0xffffff, 1);
-    this.directional.position.set(1, 1, 1);
-    ctx.scene.add(this.ambient, this.directional);
+    // Lighting (design-review F-002): mint's label wraps most of the can in
+    // #24765F, which is close in value to this section's forest background —
+    // at the old ambient 0.5 / key 1.0-from-(1,1,1) the assembly read as a
+    // black silhouette. Brighter key pulled toward the camera lights the
+    // faces the viewer actually sees, and a cool rim from behind-left cuts
+    // the silhouette off the background.
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.75);
+    this.directional = new THREE.DirectionalLight(0xffffff, 1.5);
+    this.directional.position.set(0.8, 1.2, 1.8);
+    this.rim = new THREE.DirectionalLight(0xcfe8dd, 0.9);
+    this.rim.position.set(-1.2, 0.4, -1.5);
+    ctx.scene.add(this.ambient, this.directional, this.rim);
 
     this.leaderMaterial = new THREE.LineBasicMaterial({
       color: LEADER_LINE_COLOR,
@@ -228,16 +285,16 @@ class ExplodedScene implements SceneModule {
       const target = EXPLODE_TARGETS[key];
       if (!tracked) continue;
       tl.add(tracked.delta, "y", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.y },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.y, ease: easeInOutCubic },
       ]);
       tl.add(tracked.delta, "rotX", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.rotX },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.rotX, ease: easeInOutCubic },
       ]);
       tl.add(tracked.delta, "rotZ", [
-        { t: 0, v: 0 },
-        { t: 1, v: target.rotZ },
+        { t: EXPLODE_DEADZONE_START, v: 0 },
+        { t: EXPLODE_DEADZONE_END, v: target.rotZ, ease: easeInOutCubic },
       ]);
     }
     return tl;
@@ -269,7 +326,10 @@ class ExplodedScene implements SceneModule {
 
   private updateLeaderLines(p: number): void {
     if (this.leaderMaterial) {
-      this.leaderMaterial.opacity = LEADER_LINE_BASE_OPACITY * p;
+      const fadeIn = smoothstep(
+        mapRange(p, LEADER_LINE_FADE_IN_START, LEADER_LINE_FADE_IN_END, 0, 1, true)
+      );
+      this.leaderMaterial.opacity = LEADER_LINE_BASE_OPACITY * fadeIn;
     }
 
     const worldPos = new THREE.Vector3();
@@ -317,8 +377,10 @@ class ExplodedScene implements SceneModule {
 
     if (this.ambient) this.ambient.parent?.remove(this.ambient);
     if (this.directional) this.directional.parent?.remove(this.directional);
+    if (this.rim) this.rim.parent?.remove(this.rim);
     this.ambient = null;
     this.directional = null;
+    this.rim = null;
 
     if (this.group) this.group.parent?.remove(this.group);
     this.canDispose?.();

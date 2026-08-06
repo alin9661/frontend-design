@@ -38,6 +38,7 @@ vi.mock("@/lib/engine/gl/text", () => ({
   }),
 }));
 
+import { GlText } from "@/lib/engine/gl/text";
 import createParticlesScene, {
   PARTICLE_GRID_SIZE,
   gridSizeForQuality,
@@ -123,6 +124,17 @@ describe("colorRampForProgress — forest -> lemon brand ramp", () => {
     expect(colorRampForProgress(-5).getHex()).toBe(FLOW_COLOR_FOREST.getHex());
     expect(colorRampForProgress(5).getHex()).toBe(FLOW_COLOR_LEMON.getHex());
   });
+
+  it("P4 regression: eases (smoothstep) through progress instead of a linear lerp, holding the forest endpoint longer near p=0", () => {
+    const near = colorRampForProgress(0.1);
+    // A linear lerp at p=0.1 would land 10% of the way to lemon. smoothstep
+    // holds much closer to forest at the same p (smoothstep(0.1) = 0.028).
+    const linear = new THREE.Color().lerpColors(FLOW_COLOR_FOREST, FLOW_COLOR_LEMON, 0.1);
+    const forestDistance = (c: THREE.Color) =>
+      Math.hypot(c.r - FLOW_COLOR_FOREST.r, c.g - FLOW_COLOR_FOREST.g, c.b - FLOW_COLOR_FOREST.b);
+
+    expect(forestDistance(near)).toBeLessThan(forestDistance(linear));
+  });
 });
 
 describe("flowSpeedForProgress — scroll-driven flow speed", () => {
@@ -133,6 +145,14 @@ describe("flowSpeedForProgress — scroll-driven flow speed", () => {
     expect(flowSpeedForProgress(2)).toBe(MAX_FLOW_SPEED);
     expect(flowSpeedForProgress(0.5)).toBeGreaterThan(BASE_FLOW_SPEED);
     expect(flowSpeedForProgress(0.5)).toBeLessThan(MAX_FLOW_SPEED);
+  });
+
+  it("P4 regression: eases (smoothstep) through progress instead of a linear map, holding near BASE_FLOW_SPEED longer near p=0", () => {
+    // A linear map at p=0.1 would already be 10% of the way from BASE to
+    // MAX; smoothstep(0.1) = 0.028, so the eased speed sits much closer to
+    // BASE_FLOW_SPEED at the same progress.
+    const linearAt01 = BASE_FLOW_SPEED + (MAX_FLOW_SPEED - BASE_FLOW_SPEED) * 0.1;
+    expect(flowSpeedForProgress(0.1)).toBeLessThan(linearAt01);
   });
 });
 
@@ -193,6 +213,25 @@ describe("particles scene — lifecycle", () => {
 
     scene.update(0.25, ctx);
     expect(material.uniforms.uTime!.value).toBeCloseTo(0.75);
+
+    scene.dispose();
+  });
+
+  it("F-001 regression: the GL title is a softened caption riding the emitter column, not a full-strength duplicate at view center", async () => {
+    // Regression (design-review F-001): the title rendered at full opacity
+    // at x=0 — the view's center — planting it on top of SectionParticles'
+    // DOM <h2> in the left copy column. It now captions the plume instead.
+    const scene = createParticlesScene();
+    const ctx = makeCtx();
+    await scene.init(ctx);
+
+    const opts = vi.mocked(GlText).mock.calls[0]![1] as { opacity?: number };
+    expect(opts.opacity).toBeCloseTo(0.55); // the DOM <h2> still owns the words
+
+    const title = glTextInstances[0]!.object3d;
+    expect(title.position.x).not.toBe(0); // no longer parked on the DOM headline
+    expect(title.position.x).toBeCloseTo(ctx.rect.width * 0.22); // EMITTER_X_OFFSET_FACTOR
+    expect(title.position.y).toBeGreaterThan(0); // above the plume crest
 
     scene.dispose();
   });

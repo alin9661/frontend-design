@@ -35,6 +35,9 @@ export interface GlTextOptions {
   maxWidth?: number;
   letterSpacing?: number;
   glow?: number;
+  /** Uniform alpha multiplier (0..1, default 1) — lets callers render text
+   * as a backdrop watermark instead of a full-strength headline. */
+  opacity?: number;
 }
 
 function median(): string {
@@ -139,6 +142,7 @@ export class GlText {
       maxWidth: opts.maxWidth,
       letterSpacing: opts.letterSpacing ?? 0,
       glow: opts.glow ?? 0,
+      opacity: opts.opacity ?? 1,
     };
 
     this.object3d = new THREE.Group();
@@ -146,7 +150,7 @@ export class GlText {
       uniforms: {
         uTexture: { value: font.texture },
         uColor: { value: new THREE.Color(this.opts.color) },
-        uOpacity: { value: 1 },
+        uOpacity: { value: this.opts.opacity },
         uGlow: { value: this.opts.glow },
       },
       defines: font.mode === "msdf" ? { USE_MSDF: 1 } : {},
@@ -172,6 +176,11 @@ export class GlText {
   setColor(color: number): void {
     this.opts.color = color;
     (this.material.uniforms.uColor!.value as THREE.Color).set(color);
+  }
+
+  setOpacity(opacity: number): void {
+    this.opts.opacity = opacity;
+    this.material.uniforms.uOpacity!.value = opacity;
   }
 
   dispose(): void {

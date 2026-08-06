@@ -59,6 +59,45 @@ describe("components/FlavorShowcase", () => {
     expect(screen.getByText(`${flavors[2].name} selected`)).toBeInTheDocument();
   });
 
+  it("snaps the picker dot's selection ring on a short ease-out, and rings only the active dot", () => {
+    render(<FlavorShowcase />);
+
+    const dotOf = (name: string): HTMLElement =>
+      screen.getByRole("button", { name }).firstElementChild as HTMLElement;
+
+    const activeDot = dotOf(flavors[0].name);
+    const inactiveDot = dotOf(flavors[1].name);
+
+    // The ring is direct click feedback, so it tracks the pointer rather
+    // than the 600ms flavor swap it used to be timed against.
+    for (const dot of [activeDot, inactiveDot]) {
+      expect(dot.className).toContain("duration-200");
+      expect(dot.className).toContain("ease-out");
+      expect(dot.className).not.toContain("ease-in-out");
+    }
+
+    // Both branches of the box-shadow conditional: the selected dot gets the
+    // accent ring, every other dot keeps its hairline so it never disappears
+    // against a same-colored background.
+    expect(activeDot.style.boxShadow).toBe(`0 0 0 3px ${flavors[0].accent}`);
+    expect(inactiveDot.style.boxShadow).toBe("inset 0 0 0 1.5px rgba(29,66,60,0.35)");
+  });
+
+  it("D2 regression: the dot button's own hover-scale transition matches its inner ring's curve, not Tailwind's default ease-in-out", () => {
+    // Pre-fix, the button itself was `transition-transform duration-300`
+    // (Tailwind's untouched default timing function, an ease-in-out) while
+    // its inner span (the ring) was already `duration-200 ease-out` — one
+    // dot, two curves. This assertion would FAIL against that pre-fix
+    // markup: the button's className contained "duration-300", not
+    // "duration-200"/"ease-out".
+    render(<FlavorShowcase />);
+    const button = screen.getByRole("button", { name: flavors[0].name });
+
+    expect(button.className).toContain("duration-200");
+    expect(button.className).toContain("ease-out");
+    expect(button.className).not.toContain("duration-300");
+  });
+
   it("does not have aria-current on the picker buttons (aria-pressed is the sole toggle signal)", () => {
     render(<FlavorShowcase />);
     for (const button of screen.getAllByRole("button")) {

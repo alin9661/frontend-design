@@ -112,8 +112,14 @@ class PointerFieldScene implements SceneModule {
 
     this.leafGeo = leafGeometry();
     this.berryGeo = berryGeometry();
-    this.leafMat = new THREE.MeshBasicMaterial({ vertexColors: true });
-    this.berryMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+    // No `vertexColors: true` here (design-review F-003): that flag samples
+    // the GEOMETRY's per-vertex `color` attribute, which these geometries
+    // don't have — in WebGL a missing attribute reads as (0,0,0), which
+    // multiplied every instance to solid black specks. Per-INSTANCE colors
+    // (`setColorAt` in applyColors) are picked up automatically once
+    // `instanceColor` exists; the material just needs its default white base.
+    this.leafMat = new THREE.MeshBasicMaterial();
+    this.berryMat = new THREE.MeshBasicMaterial();
 
     this.leafMesh = new THREE.InstancedMesh(this.leafGeo, this.leafMat, Math.max(this.leafIndices.length, 1));
     this.berryMesh = new THREE.InstancedMesh(this.berryGeo, this.berryMat, Math.max(this.berryIndices.length, 1));

@@ -16,7 +16,8 @@
 import * as THREE from "three";
 import type { SceneModule, ViewContext } from "@/lib/engine/types";
 import { flavorById } from "@/lib/flavors";
-import { springStep } from "@/lib/engine/core/pointer";
+import { easeOutExpo, mapRange, springStep } from "@/lib/engine/core/math";
+import { computeProgress } from "@/lib/engine/gl/view";
 import { buildCan, getCanLayout, type BuiltCan } from "./can-geometry";
 import { createLabelTexture } from "./label-texture";
 
@@ -24,10 +25,29 @@ const HERO_FLAVOR = flavorById("mint");
 
 const IDLE_SPIN_SPEED = 0.18; // rad/s
 const TILT_MAX = 0.22; // rad
-const TILT_STIFFNESS = 60;
-const TILT_DAMPING = 14;
-/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over scroll progress 0..1. */
+// Motion-audit fix N5: pointer tilt used to double-smooth (PointerTracker's
+// own ~100ms damp on top of this scene's own ~250ms spring), reading as
+// ~350ms of mushy lag between moving the pointer and the can visibly
+// responding. Stiffened to ζ≈0.85 (still slightly underdamped, so the
+// motion keeps a touch of life instead of feeling clamped) for a much
+// tighter, single perceptible smoothing stage.
+const TILT_STIFFNESS = 140;
+const TILT_DAMPING = 20;
+/** World units (== CSS px at z=0, per the engine's per-view camera convention) the camera pulls back over the pull-band described by PULL_SPAN below. */
 const SCROLL_CAMERA_PULL = 220;
+/**
+ * H1 fix: the hero is the document's FIRST section, so its own per-view
+ * progress (`computeProgress`, gl/view.ts) is ~0.5 at scrollY=0, not 0 —
+ * `(viewportH - rect.top) / (viewportH + rect.height)` with `rect.top ≈ 0`
+ * and `rect.height ≈ viewportH`. The pull used to assume progress started
+ * at 0, so `clamp(p*2,0,1)` was already pegged at 1 on the very first frame
+ * — the camera sat fully pulled back before any scrolling happened. The
+ * pull now ramps over a band of size PULL_SPAN starting at the section's own
+ * REST progress (its progress at scrollY=0, derived per-instance in init()
+ * so this stays correct even if the hero ever stops being the first section
+ * or its height changes — never hardcode 0.5 here).
+ */
+const PULL_SPAN = 0.25; // full pull after ~a quarter of the view's own progress span above rest
 const AMBIENT_INTENSITY = 0.65;
 const KEY_LIGHT_INTENSITY = 1.4;
 const RIM_EMISSIVE_INTENSITY = 1.6;
@@ -42,15 +62,22 @@ const CAN_X_OFFSET_FACTOR = 0.28; // × ctx.rect.width (CSS px == world units at
 const CAN_SCALE_FACTOR = 1.6;
 
 const HEADLINE_LINES = ["SMOOTH LIFT.", "ZERO CRASH."] as const;
-const HEADLINE_FONT_SIZE = 64; // px (world units)
-// brand.forest (dark green) — was brand.cream (0xf9f9ee), which is
-// invisible against SectionHero.tsx's cream (`bg-cream`) background (a
-// confirmed `/deep-wave` design-review finding: cream-on-cream GL headline
-// text). The DOM <h1> stays the always-visible a11y/content source of
-// truth (see the file header); this GL layer is purely a bloom/glow accent
-// on top of the can, so it needs to actually read against the page bg.
+// Watermark treatment (design-review F-001): the GL headline used to render
+// at fontSize 64 with its baseline INSIDE the can silhouette (z ≈
+// bodyRadius·0.05), so the can occluded the middle of every glyph and the
+// fragments poking out around the rim read as a z-fighting bug — while the
+// DOM <h1> carried the same words at full strength on the left. The GL
+// layer is now an intentional BACKDROP: oversized, low-opacity, pushed well
+// behind the can (same pattern as the landing page's giant flavor-name
+// watermark behind its can). The DOM <h1> stays the sole full-strength
+// headline; this layer is texture, not copy.
+const HEADLINE_FONT_SIZE = 150; // px (world units)
 const HEADLINE_COLOR = 0x1d423c; // brand.forest (lib/flavors.ts's `brand.forest`)
-const HEADLINE_GLOW = 1.4;
+const HEADLINE_GLOW = 0.25;
+const HEADLINE_OPACITY = 0.14;
+/** World-z of the watermark plane — comfortably behind the can body
+ * (radius 82 × CAN_SCALE_FACTOR 1.6 ≈ 131) so no glyph ever intersects it. */
+const HEADLINE_Z = -320;
 
 interface SpringState {
   pos: number;
@@ -78,6 +105,7 @@ interface TextModuleShape {
       maxWidth?: number;
       letterSpacing?: number;
       glow?: number;
+      opacity?: number;
     }
   ) => {
     object3d: THREE.Object3D;
@@ -109,9 +137,36 @@ class HeroCanScene implements SceneModule {
   private loadToken = 0;
 
   private baseCameraZ = 0;
+  /** The per-view camera this instance is currently writing pull into. Held
+   * only so dispose() can restore it — see dispose(). */
+  private camera: THREE.PerspectiveCamera | null = null;
   private tiltX: SpringState = { pos: 0, vel: 0 };
   private tiltZ: SpringState = { pos: 0, vel: 0 };
   private spinAngle = 0;
+  /**
+   * Motion-audit fix C2: per-VIEW progress (0..1 across just this section's
+   * own scroll span), fed by `onProgress()` — the SceneModule contract's
+   * scrubbable-progress hook (see ../../engine/types.ts), same as every
+   * other scene in this codebase. Previously `update()` read
+   * `ctx.scroll.progress`, the GLOBAL document scroll fraction — but the
+   * hero section is culled from view (and its rect.progress() pegged at 1)
+   * after only ~1/6 of the full page's scroll, so the document-wide
+   * progress never got anywhere near far enough for the designed 220px pull
+   * to actually land while the hero was visible.
+   *
+   * H1 fix: seeded from the LIVE scroll position in init() (not hardcoded
+   * 0) so the very first update() call — before Stage's next frame calls
+   * onProgress() — already reflects wherever the page actually is, instead
+   * of momentarily rendering at baseCameraZ and popping once the real
+   * onProgress() value arrives (see H6).
+   */
+  private viewProgress = 0;
+  /**
+   * H1 fix: this view's own progress at scrollY=0 — the floor the pull-band
+   * ramps up from. Computed fresh in init() from the live rect/viewport so
+   * it stays correct if the hero's position or height ever changes.
+   */
+  private restProgress = 0;
 
   init(ctx: ViewContext): void {
     // Re-runnable: tear down any previous build first (context-loss restore
@@ -129,13 +184,32 @@ class HeroCanScene implements SceneModule {
     this.setupRim();
     this.tryRegisterEnvironmentJob(ctx);
 
+    // Captured AFTER dispose() (called at the top of init()) has restored any
+    // pull this instance previously applied — otherwise a context-loss re-init
+    // would capture an already-pulled z as the new base and compound the pull
+    // on every restore (base -> base+220 -> base+440 -> ...).
+    this.camera = ctx.camera;
     this.baseCameraZ = ctx.camera.position.z;
     this.tiltX = { pos: 0, vel: 0 };
     this.tiltZ = { pos: 0, vel: 0 };
     this.spinAngle = 0;
+    // H1 fix: this view's progress at scrollY=0 is the pull-band's floor —
+    // NOT 0 (see PULL_SPAN's comment for why the hero, being the first
+    // section, never actually sees progress 0).
+    this.restProgress = computeProgress(ctx.rect, 0, ctx.size.height);
+    // H6: seed from the CURRENT scroll (not always 0 — e.g. a context-loss
+    // reinit mid-scroll) so the first update() call already lands at the
+    // right pull instead of momentarily reading rest and popping once the
+    // next onProgress() arrives.
+    this.viewProgress = computeProgress(ctx.rect, ctx.scroll.current, ctx.size.height);
 
     this.loadToken += 1;
     void this.loadHeadlineText(ctx, this.loadToken);
+  }
+
+  /** SceneModule contract (see ../../engine/types.ts): per-view scrub progress. */
+  onProgress(p: number): void {
+    this.viewProgress = p;
   }
 
   update(dt: number, ctx: ViewContext): void {
@@ -146,7 +220,25 @@ class HeroCanScene implements SceneModule {
     // the current hosts (worker/host.ts, worker/render.worker.ts) only call
     // Stage.update() at all when !reducedMotion, so under reduced motion
     // this line simply doesn't run either — see the workstream report.
-    ctx.camera.position.z = this.baseCameraZ + ctx.scroll.progress * SCROLL_CAMERA_PULL;
+    //
+    // The hero's readable beat is the PULL_SPAN-wide band starting at this
+    // view's own rest progress (its progress at scrollY=0 — see restProgress
+    // above), so the pull always starts from "no scroll yet" regardless of
+    // where in [0,1] that actually sits for a first-in-document section.
+    // easeOutExpo front-loads the pull so it reads as a quick, decisive push
+    // rather than a linear drift; mapRange's clampOut holds the band's ends
+    // flat (0 before rest, 1 once PULL_SPAN is covered) instead of
+    // extrapolating past them.
+    const pullT = mapRange(
+      this.viewProgress,
+      this.restProgress,
+      Math.min(1, this.restProgress + PULL_SPAN),
+      0,
+      1,
+      true
+    );
+    const pull = easeOutExpo(pullT);
+    ctx.camera.position.z = this.baseCameraZ + pull * SCROLL_CAMERA_PULL;
 
     if (ctx.reducedMotion) {
       // Static frame: no idle spin, no pointer tilt (§6 a11y).
@@ -167,6 +259,15 @@ class HeroCanScene implements SceneModule {
 
   dispose(): void {
     this.loadToken += 1; // invalidate any in-flight loadHeadlineText
+
+    // The per-view camera outlives this module (View owns it; init() is
+    // re-runnable for context-loss restore), and update() writes an absolute
+    // `baseCameraZ + pull` into it. Hand it back unpulled so the next init()
+    // captures the true base — see the note where baseCameraZ is assigned.
+    if (this.camera) {
+      this.camera.position.z = this.baseCameraZ;
+      this.camera = null;
+    }
 
     if (this.group) {
       this.group.parent?.remove(this.group);
@@ -260,13 +361,13 @@ class HeroCanScene implements SceneModule {
       const layout = getCanLayout();
       const headlineGroup = new THREE.Group();
       // x follows the can's own composition offset (this.group.position.x,
-      // set in init()) — this GL layer is a glow accent ON the can, not an
-      // independent element, so it needs to move with it now that the can
-      // is no longer dead-center.
+      // set in init()) so the watermark stays visually paired with the
+      // product; z pushes the whole plane behind the can (see HEADLINE_Z)
+      // and y centers the two-line block on the can's vertical middle.
       headlineGroup.position.set(
         ctx.rect.width * CAN_X_OFFSET_FACTOR,
-        layout.topOpeningY + layout.height * 0.18,
-        layout.bodyRadius * 0.05
+        layout.height * 0.5 * 0.4,
+        HEADLINE_Z
       );
 
       let cursorY = 0;
@@ -278,6 +379,7 @@ class HeroCanScene implements SceneModule {
           color: HEADLINE_COLOR,
           align: "center",
           glow: HEADLINE_GLOW,
+          opacity: HEADLINE_OPACITY,
         });
         glText.object3d.position.y = cursorY;
         cursorY -= glText.height * 1.15;

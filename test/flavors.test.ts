@@ -33,7 +33,7 @@ describe("lib/flavors", () => {
     }
   });
 
-  it("includes 'mint' and 'raspberry' ids (Hero relies on non-null lookups for these)", () => {
+  it("includes 'mint' and 'raspberry' ids used by landing-page artwork", () => {
     const ids = flavors.map((f) => f.id);
     expect(ids).toContain("mint");
     expect(ids).toContain("raspberry");
@@ -43,5 +43,13 @@ describe("lib/flavors", () => {
     expect(brand.cream).toMatch(HEX_RE);
     expect(brand.forest).toMatch(HEX_RE);
     expect(brand.forestDeep).toMatch(HEX_RE);
+  });
+
+  it("retains the canonical brand values through its palette re-export", () => {
+    expect(brand).toMatchObject({
+      cream: "#F9F9EE",
+      forest: "#1D423C",
+      forestDeep: "#142E29",
+    });
   });
 });

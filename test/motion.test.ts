@@ -269,7 +269,7 @@ describe("app/providers — the domAnimation bundle actually covers what the app
     // Spot-check one file per scanned root, including the directories the
     // narrower easing guard deliberately skips.
     expect(files.some((f) => f.endsWith(join("components", "OriginStory.tsx")))).toBe(true);
-    expect(files.some((f) => f.endsWith(join("components", "origin", "ChapterScrubber.tsx")))).toBe(true);
+    expect(files.some((f) => f.endsWith(join("components", "refer", "ReferralOntology.tsx")))).toBe(true);
     expect(files.some((f) => f.endsWith(join("app", "providers.tsx")))).toBe(true);
     expect(files.some((f) => f.endsWith(join("lib", "section-ink.tsx")))).toBe(true);
   });

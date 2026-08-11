@@ -16,12 +16,12 @@
 // — so MainThreadHost drives an identical SceneModule.onPointer sequence
 // (and HIT emission) to the worker path instead of a hand-maintained copy.
 
-import { AssetManager } from "../gl/assets";
-import { ContextLossHandler, type ContextLossTarget } from "../gl/context-loss";
-import { runViewRaycasts, ViewRaycaster } from "../gl/raycast";
-import { clampDpr, createRenderer, detectQualityTier, setSize } from "../gl/renderer";
-import { Stage, type StageFrameInput } from "../gl/stage";
+import { detectQualityTier } from "../core/quality";
+import type { ContextLossHandler, ContextLossOptions, ContextLossTarget } from "../gl/context-loss";
+import type { RunViewRaycastsInput, ViewRaycaster } from "../gl/raycast";
+import type { Stage, StageFrameInput, StageOptions } from "../gl/stage";
 import type {
+  AddViewOptions,
   AssetManager as AssetManagerContract,
   HostInit,
   PointerState,
@@ -59,15 +59,30 @@ export function supportsOffscreenWorkerRendering(): boolean {
   );
 }
 
-/** Silent fallback: WorkerHost when the browser supports it, else MainThreadHost. */
+/**
+ * Silent fallback: WorkerHost is the synchronous, static default. The
+ * unsupported-browser branch returns a proxy that imports MainThreadHost on
+ * demand. Keeping this factory synchronous avoids rippling an async contract
+ * through React while still removing the main-thread GL/THREE graph from the
+ * normal OffscreenCanvas path.
+ */
 export function createRenderHost(): RenderHost {
-  return supportsOffscreenWorkerRendering() ? new WorkerHost() : new MainThreadHost();
+  return supportsOffscreenWorkerRendering() ? new WorkerHost() : new LazyMainThreadHost();
 }
 
 // ---------------------------------------------------------------------------
 // WorkerHost — posts MainToWorker messages to render.worker.ts, relays
 // WorkerToMain messages back out via onMessage().
 // ---------------------------------------------------------------------------
+
+// transferControlToOffscreen() permanently consumes an HTMLCanvasElement:
+// the node can never be transferred again, and can never get a 2D/WebGL
+// context either — terminating the worker does NOT hand it back. This WeakSet
+// preserves that browser-level invariant across host instances (both
+// WorkerHost and MainThreadHost consult it) without extending the lifetime of
+// detached canvas nodes. Callers must therefore mint a FRESH canvas for every
+// init attempt — see GlCanvas.mint() / EngineProvider's mount effect.
+const transferredCanvases = new WeakSet<HTMLCanvasElement>();
 
 export class WorkerHost implements RenderHost {
   readonly mode = "worker" as const;
@@ -80,6 +95,16 @@ export class WorkerHost implements RenderHost {
   };
 
   async init(canvas: HTMLCanvasElement, opts: HostInit): Promise<void> {
+    if (transferredCanvases.has(canvas)) {
+      throw new DOMException(
+        "WorkerHost.init() cannot reuse a canvas already transferred off-thread",
+        "InvalidStateError"
+      );
+    }
+
+    const offscreen = canvas.transferControlToOffscreen();
+    transferredCanvases.add(canvas);
+
     // Next 15/webpack worker bundling requires a *static* `new URL(...,
     // import.meta.url)` argument — no dynamic string paths — so it can be
     // statically discovered and code-split.
@@ -87,7 +112,6 @@ export class WorkerHost implements RenderHost {
     this.worker = worker;
     worker.addEventListener("message", this.handleMessage);
 
-    const offscreen = canvas.transferControlToOffscreen();
     // BUG B1 fix: the worker can fail to construct its renderer (real WebGL2
     // context creation throwing — headless/SwiftShader environments) and
     // posts the additive INIT_FAILED message instead of READY in that case
@@ -114,6 +138,10 @@ export class WorkerHost implements RenderHost {
         dpr: opts.dpr,
         quality: opts.quality,
         reducedMotion: opts.reducedMotion,
+        // Forwarded rather than re-derived worker-side: a worker has no
+        // `location` of the page that spawned it, so this is the only way
+        // gl/post.ts's route gate can ever see a route.
+        route: opts.route,
       },
       [offscreen]
     );
@@ -125,8 +153,8 @@ export class WorkerHost implements RenderHost {
     this.worker?.postMessage({ type: "FRAME_STATE", state }, [state.buffer]);
   }
 
-  addView(viewId: number, sceneId: SceneId, rect: RectData): void {
-    this.worker?.postMessage({ type: "VIEW_ADD", viewId, sceneId, rect });
+  addView(viewId: number, sceneId: SceneId, rect: RectData, opts?: AddViewOptions): void {
+    this.worker?.postMessage({ type: "VIEW_ADD", viewId, sceneId, rect, post: opts?.post });
   }
 
   removeView(viewId: number): void {
@@ -156,6 +184,84 @@ export class WorkerHost implements RenderHost {
   }
 }
 
+/**
+ * Queues the small amount of traffic that can arrive before fallback init
+ * (message listeners and the initial resize), then forwards to the lazily
+ * constructed MainThreadHost. `import("./host")` is deliberately inside the
+ * fallback branch; MainThreadHost itself dynamically loads its GL runtime
+ * dependencies during init, which is the split that keeps THREE out of the
+ * worker-capable browser bundle.
+ */
+class LazyMainThreadHost implements RenderHost {
+  readonly mode = "main" as const;
+
+  private host: MainThreadHost | null = null;
+  private hostPromise: Promise<MainThreadHost> | null = null;
+  private readonly listeners = new Set<(m: WorkerToMain) => void>();
+  private readonly listenerUnsubs = new Map<(m: WorkerToMain) => void, () => void>();
+  private pendingResize: [number, number, number] | null = null;
+  private destroyed = false;
+
+  async init(canvas: HTMLCanvasElement, opts: HostInit): Promise<void> {
+    const host = await this.load();
+    await host.init(canvas, opts);
+    if (this.destroyed) host.destroy();
+  }
+
+  frame(state: Float32Array): void {
+    this.host?.frame(state);
+  }
+
+  addView(viewId: number, sceneId: SceneId, rect: RectData, opts?: AddViewOptions): void {
+    this.host?.addView(viewId, sceneId, rect, opts);
+  }
+
+  removeView(viewId: number): void {
+    this.host?.removeView(viewId);
+  }
+
+  invoke(viewId: number, method: string, args: unknown[]): void {
+    this.host?.invoke(viewId, method, args);
+  }
+
+  onMessage(cb: (m: WorkerToMain) => void): () => void {
+    this.listeners.add(cb);
+    if (this.host) this.listenerUnsubs.set(cb, this.host.onMessage(cb));
+
+    return () => {
+      this.listeners.delete(cb);
+      this.listenerUnsubs.get(cb)?.();
+      this.listenerUnsubs.delete(cb);
+    };
+  }
+
+  resize(w: number, h: number, dpr: number): void {
+    this.pendingResize = [w, h, dpr];
+    this.host?.resize(w, h, dpr);
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    for (const unsubscribe of this.listenerUnsubs.values()) unsubscribe();
+    this.listenerUnsubs.clear();
+    this.listeners.clear();
+    this.host?.destroy();
+  }
+
+  private load(): Promise<MainThreadHost> {
+    if (!this.hostPromise) {
+      this.hostPromise = import("./host").then(({ MainThreadHost: Host }) => {
+        const host = new Host();
+        this.host = host;
+        for (const cb of this.listeners) this.listenerUnsubs.set(cb, host.onMessage(cb));
+        if (this.pendingResize) host.resize(...this.pendingResize);
+        return host;
+      });
+    }
+    return this.hostPromise;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MainThreadHost — drives gl/Stage directly on the main thread.
 // ---------------------------------------------------------------------------
@@ -166,15 +272,25 @@ export interface MainThreadHostDeps {
   /** Test seam: defaults to a real gl/assets.ts `AssetManager`. */
   createAssets?: () => AssetManagerContract;
   /** Test seam: defaults to a real gl/stage.ts `Stage`. */
-  createStage?: (renderer: RendererLike, frame: StageFrameInput) => Stage;
+  createStage?: (renderer: RendererLike, frame: StageFrameInput, opts: StageOptions) => Stage;
+  /** Internal lazy-runtime seams; public tests normally only override the three factories above. */
+  createContextLoss?: (target: ContextLossTarget, opts: ContextLossOptions) => ContextLossHandler;
+  runViewRaycasts?: (input: RunViewRaycastsInput) => void;
+  setSize?: (renderer: RendererLike, w: number, h: number, dpr: number, tier?: QualityTier) => void;
+  clampDpr?: (dpr: number, tier?: QualityTier) => number;
 }
 
 export class MainThreadHost implements RenderHost {
   readonly mode = "main" as const;
 
-  private readonly createRendererImpl: (canvas: HTMLCanvasElement) => RendererLike;
-  private readonly createAssetsImpl: () => AssetManagerContract;
-  private readonly createStageImpl: (renderer: RendererLike, frame: StageFrameInput) => Stage;
+  private createRendererImpl?: (canvas: HTMLCanvasElement) => RendererLike;
+  private createAssetsImpl?: () => AssetManagerContract;
+  private createStageImpl?: (renderer: RendererLike, frame: StageFrameInput, opts: StageOptions) => Stage;
+  private createContextLossImpl?: (target: ContextLossTarget, opts: ContextLossOptions) => ContextLossHandler;
+  private runViewRaycastsImpl?: (input: RunViewRaycastsInput) => void;
+  private setSizeImpl?: (renderer: RendererLike, w: number, h: number, dpr: number, tier?: QualityTier) => void;
+  private clampDprImpl?: (dpr: number, tier?: QualityTier) => number;
+  private runtimeDepsPromise: Promise<void> | null = null;
 
   private renderer: RendererLike | null = null;
   private stage: Stage | null = null;
@@ -216,16 +332,48 @@ export class MainThreadHost implements RenderHost {
   private readonly stats = new StatsReporter();
 
   constructor(deps: MainThreadHostDeps = {}) {
-    this.createRendererImpl = deps.createRenderer ?? ((canvas) => createRenderer({ canvas }));
-    this.createAssetsImpl = deps.createAssets ?? (() => new AssetManager());
-    this.createStageImpl = deps.createStage ?? ((renderer, frame) => new Stage(renderer, frame));
+    this.createRendererImpl = deps.createRenderer;
+    this.createAssetsImpl = deps.createAssets;
+    this.createStageImpl = deps.createStage;
+    this.createContextLossImpl = deps.createContextLoss;
+    this.runViewRaycastsImpl = deps.runViewRaycasts;
+    this.setSizeImpl = deps.setSize;
+    this.clampDprImpl = deps.clampDpr;
   }
 
   async init(canvas: HTMLCanvasElement, opts: HostInit): Promise<void> {
+    // Same single-use invariant as WorkerHost.init(). MainThreadHost is the
+    // graceful-degradation target for a failed WorkerHost boot, and a canvas
+    // that WorkerHost already transferred can never produce a WebGL context —
+    // so any such retry must mint a fresh node first. Failing loudly here
+    // beats an opaque "getContext returned null" further downstream.
+    if (transferredCanvases.has(canvas)) {
+      throw new DOMException(
+        "MainThreadHost.init() cannot reuse a canvas already transferred off-thread",
+        "InvalidStateError"
+      );
+    }
+
+    await this.ensureRuntimeDeps();
+
     this.opts = opts;
-    this.renderer = this.createRendererImpl(canvas);
-    this.assets = this.createAssetsImpl();
-    this.stage = this.createStageImpl(this.renderer, this.buildFrameInput());
+    this.renderer = this.createRendererImpl!(canvas);
+    this.assets = this.createAssetsImpl!();
+    this.stage = this.createStageImpl!(this.renderer, this.buildFrameInput(), {
+      // Mirrors render.worker.ts's Stage options exactly. onError matters more
+      // here than it looks: consumers now keep their 2D fallback art up until
+      // VIEW_READY arrives, so a scene whose init() rejects leaves that art up
+      // permanently. Without this the failure is completely silent (Stage's
+      // default onError swallows) and presents as "the GL section never
+      // appears" with nothing in the console to explain why.
+      onError: (err, viewId) => console.error(`[deep-wave] view ${viewId} scene init failed`, err),
+      onViewReady: (viewId) => this.emit({ type: "VIEW_READY", viewId }),
+      // Without this the post chain builds with `route: undefined`, which
+      // gl/post.ts reads as "I do not know where I am" and answers by
+      // constructing NO riso grain effect at all — bloom and SMAA would run
+      // and the grain would be silently absent on every route and tier.
+      route: opts.route,
+    });
 
     this.unsubscribeAssetProgress = this.assets.onProgress((p, id) => {
       this.emit({ type: "ASSET_PROGRESS", p, id });
@@ -234,7 +382,7 @@ export class MainThreadHost implements RenderHost {
 
     // Canvas-like target (HTMLCanvasElement or a test double) — see
     // gl/context-loss.ts for why this only needs add/removeEventListener.
-    this.contextLoss = new ContextLossHandler(canvas as unknown as ContextLossTarget, {
+    this.contextLoss = this.createContextLossImpl!(canvas as unknown as ContextLossTarget, {
       onLost: () => this.emit({ type: "CONTEXT_LOST" }),
       onRestored: () => {
         this.stage
@@ -258,7 +406,7 @@ export class MainThreadHost implements RenderHost {
     });
   }
 
-  addView(viewId: number, sceneId: SceneId, rect: RectData): void {
+  addView(viewId: number, sceneId: SceneId, rect: RectData, opts?: AddViewOptions): void {
     const generation = this.bumpGeneration(viewId);
     loadScene(sceneId)
       .then((module) => {
@@ -273,7 +421,10 @@ export class MainThreadHost implements RenderHost {
           return;
         }
         this.moduleByView.set(viewId, module);
-        this.stage?.addView(viewId, rect, module);
+        // `post` is the caller's opt-in to the shared composer; Stage still
+        // has the final say (`resolvePostView`) about whether this frame's
+        // arrangement can actually be composited.
+        this.stage?.addView(viewId, rect, module, { post: opts?.post === true });
       })
       .catch((err: unknown) => {
         console.error(`[deep-wave] scene "${sceneId}" (view ${viewId}) failed to load`, err);
@@ -316,17 +467,26 @@ export class MainThreadHost implements RenderHost {
     this.lastPointer = pointer;
 
     for (const v of unpacked.views) {
-      this.stage.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height });
+      // Slot 5's packed progress is authoritative: identical to the
+      // rect-derived value for an ordinary view, and the only correct value
+      // for a sticky view (see gl/view.ts View.progressOverride).
+      this.stage.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height }, v.progress);
     }
 
     this.stage.setFrame(this.buildFrameInput());
 
     const reducedMotion = this.opts?.reducedMotion ?? false;
-    // Reduced motion: static frames — advance no scene animation state, but
-    // still render so a real scroll/progress change is reflected (§6 a11y).
-    if (!reducedMotion) {
-      this.stage.update(dt);
-    }
+    // Reduced motion (§6 a11y): scroll-driven pose still updates, ambient
+    // animation does not. `dt = 0` is the whole mechanism, and it is not the
+    // same as skipping `update()` outright — which is what this used to do.
+    // `Stage.update()` is the ONLY caller of `SceneModule.update()` and
+    // `onProgress()`, so skipping it froze every scene at whatever pose its
+    // `init()` seeded and left `progress` at its init-time value: the origin
+    // film simply did not respond to scroll for a reduced-motion visitor, for
+    // fifteen viewports, contradicting its own documented contract ("Scroll IS
+    // the film"). Handing over a zero dt keeps the scroll-driven half live
+    // while every `elapsed += dt` spin, flutter and drift stands still.
+    this.stage.update(reducedMotion ? 0 : dt);
 
     const renderStart = now;
     this.stage.render();
@@ -336,7 +496,7 @@ export class MainThreadHost implements RenderHost {
     // Same shared path render.worker.ts's RAF tick calls (see this file's
     // header comment) — candidates are only the views a scene actually
     // registered interactive objects for (Stage.raycastCandidates()).
-    runViewRaycasts({
+    this.runViewRaycastsImpl!({
       candidates: this.stage.raycastCandidates(),
       pointer,
       scrollY: scroll.current,
@@ -350,7 +510,7 @@ export class MainThreadHost implements RenderHost {
   resize(w: number, h: number, dpr: number): void {
     this.size = { width: w, height: h, dpr };
     if (this.renderer) {
-      setSize(this.renderer, w, h, dpr, this.opts?.quality ?? "high");
+      this.setSizeImpl!(this.renderer, w, h, dpr, this.opts?.quality ?? "high");
     }
     // F4 fix: retain the last-known scroll/pointer state (see
     // `lastScroll`/`lastPointer`'s doc comment) — a resize must not snap
@@ -383,7 +543,10 @@ export class MainThreadHost implements RenderHost {
       size: this.size,
       quality: this.currentQuality(),
       reducedMotion: this.opts?.reducedMotion ?? false,
-      assets: this.assets ?? new AssetManager(),
+      // buildFrameInput is only reached after init() has created the assets
+      // manager; the non-null assertion keeps this path free of a static
+      // AssetManager constructor import.
+      assets: this.assets!,
     };
   }
 
@@ -391,7 +554,7 @@ export class MainThreadHost implements RenderHost {
     if (this.opts?.quality) return this.opts.quality;
     return detectQualityTier({
       hardwareConcurrency: typeof navigator !== "undefined" ? navigator.hardwareConcurrency : 4,
-      dpr: clampDpr(this.size.dpr),
+      dpr: this.clampDprImpl!(this.size.dpr),
     });
   }
 
@@ -412,5 +575,26 @@ export class MainThreadHost implements RenderHost {
 
   private emit(m: WorkerToMain): void {
     for (const cb of this.listeners) cb(m);
+  }
+
+  private ensureRuntimeDeps(): Promise<void> {
+    if (!this.runtimeDepsPromise) {
+      this.runtimeDepsPromise = Promise.all([
+        import("../gl/assets"),
+        import("../gl/context-loss"),
+        import("../gl/raycast"),
+        import("../gl/renderer"),
+        import("../gl/stage"),
+      ]).then(([assets, contextLoss, raycast, renderer, stage]) => {
+        this.createRendererImpl ??= (canvas) => renderer.createRenderer({ canvas });
+        this.createAssetsImpl ??= () => new assets.AssetManager();
+        this.createStageImpl ??= (rendererLike, frame, opts) => new stage.Stage(rendererLike, frame, opts);
+        this.createContextLossImpl ??= (target, opts) => new contextLoss.ContextLossHandler(target, opts);
+        this.runViewRaycastsImpl ??= raycast.runViewRaycasts;
+        this.setSizeImpl ??= renderer.setSize;
+        this.clampDprImpl ??= renderer.clampDpr;
+      });
+    }
+    return this.runtimeDepsPromise;
   }
 }

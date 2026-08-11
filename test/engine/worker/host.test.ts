@@ -91,19 +91,48 @@ function makeRendererMock(): RendererLike {
 
 const PLACEHOLDER_RECT: RectData = { top: 0, left: 0, width: 300, height: 300 };
 
-describe("createRenderHost — fallback selection", () => {
+describe("@/lib/engine/worker/host — createRenderHost fallback selection", () => {
   it("jsdom has neither transferControlToOffscreen nor OffscreenCanvas", () => {
     expect(supportsOffscreenWorkerRendering()).toBe(false);
   });
 
-  it("returns a MainThreadHost in jsdom (no OffscreenCanvas support)", () => {
+  it("returns a lazy main-mode host in jsdom (no OffscreenCanvas support)", () => {
     const host = createRenderHost();
-    expect(host).toBeInstanceOf(MainThreadHost);
     expect(host.mode).toBe("main");
+    // The concrete MainThreadHost (and its GL runtime) is constructed only
+    // if init() is attempted in this unsupported-browser branch.
+    expect(host).not.toBeInstanceOf(MainThreadHost);
+    host.destroy();
+  });
+
+  it("returns WorkerHost synchronously when both OffscreenCanvas guards pass", () => {
+    const originalTransfer = Object.getOwnPropertyDescriptor(
+      HTMLCanvasElement.prototype,
+      "transferControlToOffscreen"
+    );
+    Object.defineProperty(HTMLCanvasElement.prototype, "transferControlToOffscreen", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.stubGlobal("OffscreenCanvas", class OffscreenCanvasStub {});
+
+    try {
+      expect(supportsOffscreenWorkerRendering()).toBe(true);
+      const host = createRenderHost();
+      expect(host).toBeInstanceOf(WorkerHost);
+      expect(host.mode).toBe("worker");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalTransfer) {
+        Object.defineProperty(HTMLCanvasElement.prototype, "transferControlToOffscreen", originalTransfer);
+      } else {
+        delete (HTMLCanvasElement.prototype as Partial<HTMLCanvasElement>).transferControlToOffscreen;
+      }
+    }
   });
 });
 
-describe("WorkerHost", () => {
+describe("@/lib/engine/worker/host — WorkerHost", () => {
   it("reports mode 'worker' without touching the Worker global (constructor only)", () => {
     const host = new WorkerHost();
     expect(host.mode).toBe("worker");
@@ -135,7 +164,14 @@ describe("WorkerHost", () => {
 
     function fakeCanvas(): HTMLCanvasElement {
       const canvas = document.createElement("canvas");
-      (canvas as unknown as { transferControlToOffscreen: () => unknown }).transferControlToOffscreen = () => ({});
+      let transferred = false;
+      (canvas as unknown as { transferControlToOffscreen: () => unknown }).transferControlToOffscreen = vi.fn(() => {
+        if (transferred) {
+          throw new DOMException("Canvas has already been transferred", "InvalidStateError");
+        }
+        transferred = true;
+        return {};
+      });
       return canvas;
     }
 
@@ -173,10 +209,94 @@ describe("WorkerHost", () => {
 
       await expect(initPromise).resolves.toBeUndefined();
     });
+
+    it("puts the route on INIT and the post opt-in on VIEW_ADD, the only way either can cross the thread", async () => {
+      // A worker has no `location` for the page that spawned it and no view
+      // registry of its own, so if these two fields do not ride the messages
+      // they cannot exist worker-side at all — the post chain then builds
+      // with no route (no riso grain) and no view ever opts in (no chain).
+      const host = new WorkerHost();
+      const initPromise = host.init(fakeCanvas(), {
+        dpr: 2,
+        quality: "high",
+        reducedMotion: false,
+        route: "/",
+      });
+      const worker = FakeWorker.instances.at(-1)!;
+      worker.emit({ type: "READY" });
+      await initPromise;
+
+      expect(worker.posted[0]).toMatchObject({ type: "INIT", route: "/" });
+
+      host.addView(7, "hero-can", { top: 0, left: 0, width: 10, height: 10 }, { post: true });
+      host.addView(8, "placeholder", { top: 0, left: 0, width: 10, height: 10 });
+
+      expect(worker.posted.at(-2)).toMatchObject({ type: "VIEW_ADD", viewId: 7, post: true });
+      // Absent rather than true: opting in is per-view and must never be
+      // inherited from another view's request.
+      expect((worker.posted.at(-1) as { post?: boolean }).post).not.toBe(true);
+    });
+
+    it("never calls transferControlToOffscreen twice for a canvas already consumed by another WorkerHost", async () => {
+      const canvas = fakeCanvas();
+      const transfer = vi.mocked(canvas.transferControlToOffscreen);
+      const firstHost = new WorkerHost();
+      const firstInit = firstHost.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+
+      FakeWorker.instances.at(-1)!.emit({ type: "READY" });
+      await firstInit;
+
+      const secondHost = new WorkerHost();
+      await expect(
+        secondHost.init(canvas, { dpr: 1, quality: "high", reducedMotion: false })
+      ).rejects.toMatchObject({ name: "InvalidStateError" });
+
+      expect(transfer).toHaveBeenCalledTimes(1);
+      expect(FakeWorker.instances).toHaveLength(1);
+      firstHost.destroy();
+    });
+
+    it("refuses a MainThreadHost fallback onto a canvas WorkerHost already transferred (no renderer is built)", async () => {
+      // The graceful-degradation path everybody expects to add next is
+      // "WorkerHost.init() rejected → retry with MainThreadHost". A
+      // transferred canvas can never get a WebGL context either, so that
+      // retry MUST mint a fresh node. Fail loudly instead of handing the
+      // renderer a dead canvas and reporting READY over a black screen.
+      const canvas = fakeCanvas();
+      const workerHost = new WorkerHost();
+      const init = workerHost.init(canvas, { dpr: 1, quality: "high", reducedMotion: false });
+      FakeWorker.instances.at(-1)!.emit({ type: "READY" });
+      await init;
+
+      const createRenderer = vi.fn(() => makeRendererMock());
+      const fallback = new MainThreadHost({ createRenderer });
+
+      await expect(
+        fallback.init(canvas, { dpr: 1, quality: "high", reducedMotion: false })
+      ).rejects.toMatchObject({ name: "InvalidStateError" });
+      expect(createRenderer).not.toHaveBeenCalled();
+
+      workerHost.destroy();
+    });
+
+    it("accepts a MainThreadHost init on a canvas that was never transferred (the other branch of the guard)", async () => {
+      const createRenderer = vi.fn(() => makeRendererMock());
+      const host = new MainThreadHost({ createRenderer });
+      const onMessage = vi.fn();
+      host.onMessage(onMessage);
+
+      await expect(
+        host.init(fakeCanvas(), { dpr: 1, quality: "high", reducedMotion: false })
+      ).resolves.toBeUndefined();
+      expect(createRenderer).toHaveBeenCalledTimes(1);
+      expect(onMessage).toHaveBeenCalledWith({ type: "READY" });
+
+      host.destroy();
+    });
   });
 });
 
-describe("MainThreadHost — end to end against a RendererLike mock", () => {
+describe("@/lib/engine/worker/host — MainThreadHost end to end against a RendererLike mock", () => {
   beforeEach(() => {
     sceneInit.mockClear();
     sceneUpdate.mockClear();
@@ -226,7 +346,134 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
     expect(rendererMock.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("skips SceneModule.update under reducedMotion but still renders (static frame, §6 a11y)", async () => {
+  // MainThreadHost is the GL-less fallback path. Consumers (OriginStory) now
+  // hold their 2D art up until VIEW_READY arrives for their specific view, so
+  // if this host were mute the fallback path would hide the GL section
+  // forever. The worker path is covered in render.worker.test.ts; this pins
+  // the main-thread twin.
+  it("emits VIEW_READY for the specific view once its SceneModule.init() resolves", async () => {
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    await host.init(document.createElement("canvas"), { dpr: 1, quality: "high", reducedMotion: false });
+    expect(onMessage).not.toHaveBeenCalledWith({ type: "VIEW_READY", viewId: 7 });
+
+    host.addView(7, "placeholder", PLACEHOLDER_RECT);
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledWith({ type: "VIEW_READY", viewId: 7 }));
+
+    host.destroy();
+  });
+
+  it("emits no VIEW_READY and logs when a SceneModule.init() rejects (the art must stay up, loudly)", async () => {
+    // The other branch: graceful degradation depends on a failed scene NEVER
+    // claiming readiness, and on that failure being diagnosable. Stage's
+    // default onError swallows, so a missing onError here is a silent hang.
+    sceneInit.mockRejectedValueOnce(new Error("scene boom"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({ createRenderer: () => rendererMock });
+    const onMessage = vi.fn();
+    host.onMessage(onMessage);
+
+    await host.init(document.createElement("canvas"), { dpr: 1, quality: "high", reducedMotion: false });
+    host.addView(9, "placeholder", PLACEHOLDER_RECT);
+
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+    expect(onMessage).not.toHaveBeenCalledWith({ type: "VIEW_READY", viewId: 9 });
+    expect(consoleError.mock.calls[0]!.join(" ")).toContain("9");
+
+    consoleError.mockRestore();
+    host.destroy();
+  });
+
+  it("threads the caller's route into StageOptions, without which the post chain builds no grain at all", async () => {
+    // The post chain reads its route from StageOptions and, per gl/post.ts,
+    // an UNDEFINED route means "I do not know where I am" — which builds no
+    // riso grain effect at all. A host that never forwards a route therefore
+    // ships bloom+SMAA and silently drops C6 on every route and every tier,
+    // while riso's own unit tests (which hand-pass a route) stay green.
+    const captured: Array<Record<string, unknown>> = [];
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({
+      createRenderer: () => rendererMock,
+      createStage: (renderer, frame, opts) => {
+        captured.push(opts as unknown as Record<string, unknown>);
+        return new Stage(renderer, frame, opts);
+      },
+    });
+
+    await host.init(document.createElement("canvas"), {
+      dpr: 1,
+      quality: "high",
+      reducedMotion: false,
+      route: "/deep-wave",
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.route).toBe("/deep-wave");
+    host.destroy();
+  });
+
+  it("leaves the route unset — never guesses one — when the caller did not name it", async () => {
+    // `undefined` and `""` are NOT interchangeable here: gl/shaders/riso.ts
+    // normalises `""` to `"/"` and would grant grain to a caller that never
+    // claimed the landing page.
+    const captured: Array<Record<string, unknown>> = [];
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({
+      createRenderer: () => rendererMock,
+      createStage: (renderer, frame, opts) => {
+        captured.push(opts as unknown as Record<string, unknown>);
+        return new Stage(renderer, frame, opts);
+      },
+    });
+
+    await host.init(document.createElement("canvas"), { dpr: 1, quality: "high", reducedMotion: false });
+
+    expect(captured[0]!.route).toBeUndefined();
+    host.destroy();
+  });
+
+  it("forwards a view's post opt-in to Stage.addView, and defaults it off", async () => {
+    const addViewCalls: Array<{ viewId: number; post: boolean | undefined }> = [];
+    class RecordingStage extends Stage {
+      override addView(
+        viewId: number,
+        rect: RectData,
+        module: Parameters<Stage["addView"]>[2],
+        opts?: Parameters<Stage["addView"]>[3],
+      ): void {
+        addViewCalls.push({ viewId, post: opts?.post });
+        super.addView(viewId, rect, module, opts);
+      }
+    }
+    const rendererMock = makeRendererMock();
+    const host = new MainThreadHost({
+      createRenderer: () => rendererMock,
+      createStage: (renderer, frame, opts) => new RecordingStage(renderer, frame, opts),
+    });
+
+    await host.init(document.createElement("canvas"), { dpr: 1, quality: "high", reducedMotion: false });
+    host.addView(1, "placeholder", PLACEHOLDER_RECT, { post: true });
+    host.addView(2, "placeholder", PLACEHOLDER_RECT);
+
+    await vi.waitFor(() => expect(addViewCalls).toHaveLength(2));
+    // Without this hop there is no expressible way to reach gl/post.ts:
+    // `Stage.resolvePostView()` returns null for every view whose `post` is
+    // false, so the whole composer is unreachable in the running app.
+    expect(addViewCalls.find((call) => call.viewId === 1)!.post).toBe(true);
+    // Default OFF, and explicitly so: a composer owns the entire drawing
+    // buffer, so a view that opted in while sharing the canvas would erase
+    // every other view on it.
+    expect(addViewCalls.find((call) => call.viewId === 2)!.post).toBe(false);
+
+    host.destroy();
+  });
+
+  it("drives SceneModule.update with dt 0 under reducedMotion, so scroll still moves the scene (§6 a11y)", async () => {
     const rendererMock = makeRendererMock();
     const host = new MainThreadHost({ createRenderer: () => rendererMock });
 
@@ -237,9 +484,22 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
 
     host.resize(800, 600, 1);
     host.frame(makeFrameState([{ viewId: 1, ...PLACEHOLDER_RECT, progress: 0 }]));
+    host.frame(makeFrameState([{ viewId: 1, ...PLACEHOLDER_RECT, progress: 0.5 }]));
 
-    expect(sceneUpdate).not.toHaveBeenCalled();
-    expect(rendererMock.render).toHaveBeenCalledTimes(1); // still renders the static frame
+    // The regression this pins: skipping `Stage.update()` outright is not a
+    // "static frame", it is a DEAD one. Stage.update is the only caller of
+    // SceneModule.update/onProgress, so a scene that positions itself from
+    // scroll (the origin film is written on exactly that contract) stayed
+    // frozen on its init pose for the whole section, and re-rendering an
+    // unchanged scene reflected nothing.
+    expect(sceneUpdate).toHaveBeenCalledTimes(2);
+    for (const call of sceneUpdate.mock.calls) {
+      // Zero dt is what actually stops the ambient motion: every scene
+      // accumulates its spins and flutter as `elapsed += dt`.
+      expect(call[0]).toBe(0);
+    }
+    expect(sceneOnProgress.mock.calls.map((call) => call[0])).toEqual([0, 0.5]);
+    expect(rendererMock.render).toHaveBeenCalledTimes(2);
 
     host.destroy();
   });
@@ -435,7 +695,7 @@ describe("MainThreadHost — end to end against a RendererLike mock", () => {
 // target, SceneModule.onPointer called locally.
 // ---------------------------------------------------------------------------
 
-describe("MainThreadHost — raycast/HIT wiring (design doc §4A)", () => {
+describe("@/lib/engine/worker/host — MainThreadHost raycast/HIT wiring (design doc §4A)", () => {
   const FULL_RECT: RectData = { top: 0, left: 0, width: 800, height: 600 };
 
   function packFrame(

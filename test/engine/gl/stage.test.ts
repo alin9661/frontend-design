@@ -7,7 +7,9 @@
 // tracked.
 
 import { describe, expect, it, vi } from "vitest";
+import * as THREE from "three";
 import { Stage, type StageFrameInput } from "@/lib/engine/gl/stage";
+import type { PostLike } from "@/lib/engine/gl/post";
 import type { RectData, RendererLike, SceneModule, ViewContext } from "@/lib/engine/types";
 
 function mockRenderer(): RendererLike & { calls: string[] } {
@@ -56,6 +58,104 @@ async function flush(): Promise<void> {
 }
 
 describe("Stage.addView / removeView", () => {
+  it("reports a view ready exactly once after successful init and never reports a rejecting init", async () => {
+    const onViewReady = vi.fn();
+    const onError = vi.fn();
+    const stage = new Stage(mockRenderer(), baseFrame(), { onViewReady, onError });
+    const readyScene: SceneModule = {
+      init: async () => {},
+      update: () => {},
+      dispose: () => {},
+    };
+    const rejected = new Error("scene init failed");
+    const rejectedScene: SceneModule = {
+      init: () => Promise.reject(rejected),
+      update: () => {},
+      dispose: () => {},
+    };
+
+    stage.addView(7, { top: 0, left: 0, width: 100, height: 100 }, readyScene);
+    stage.addView(8, { top: 0, left: 0, width: 100, height: 100 }, rejectedScene);
+    await flush();
+
+    expect(onViewReady).toHaveBeenCalledTimes(1);
+    expect(onViewReady).toHaveBeenCalledWith(7);
+    expect(onError).toHaveBeenCalledWith(rejected, 8);
+  });
+
+  it("does not report ready for a view removed while its init was still in flight", async () => {
+    // The readiness signal is what tells the main thread it may drop its 2D
+    // fallback art. A view that has been torn down mid-init will never draw a
+    // pixel, so announcing it would hide the fallback over nothing.
+    const onViewReady = vi.fn();
+    const stage = new Stage(mockRenderer(), baseFrame(), { onViewReady });
+    let resolveInit: () => void = () => {};
+    const slowScene: SceneModule = {
+      init: () => new Promise<void>((resolve) => { resolveInit = resolve; }),
+      update: () => {},
+      dispose: () => {},
+    };
+
+    stage.addView(9, { top: 0, left: 0, width: 100, height: 100 }, slowScene);
+    stage.removeView(9);
+    resolveInit();
+    await flush();
+
+    expect(onViewReady).not.toHaveBeenCalled();
+  });
+
+  it("re-announces readiness after a context-restore reinit, and stays silent for one that throws", async () => {
+    const onViewReady = vi.fn();
+    const onError = vi.fn();
+    const stage = new Stage(mockRenderer(), baseFrame(), { onViewReady, onError });
+    let initCalls = 0;
+    const flaky: SceneModule = {
+      init: () => {
+        initCalls++;
+        // First init (addView) and the first reinit succeed; the second
+        // reinit throws, as a shader recompile can on a downgraded context.
+        if (initCalls === 3) throw new Error("shader recompile failed");
+      },
+      update: () => {},
+      dispose: () => {},
+    };
+
+    stage.addView(3, { top: 0, left: 0, width: 100, height: 100 }, flaky);
+    await flush();
+    expect(onViewReady).toHaveBeenCalledTimes(1);
+
+    await stage.reinit();
+    expect(onViewReady).toHaveBeenCalledTimes(2);
+    expect(onViewReady).toHaveBeenLastCalledWith(3);
+
+    await stage.reinit();
+    expect(onViewReady).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports ready for the surviving re-add when a viewId is recycled mid-init", async () => {
+    // Same guard, opposite branch: the stale promise must stay silent but the
+    // live instance registered under the recycled id must still be announced.
+    const onViewReady = vi.fn();
+    const stage = new Stage(mockRenderer(), baseFrame(), { onViewReady });
+    let resolveStale: () => void = () => {};
+    const staleScene: SceneModule = {
+      init: () => new Promise<void>((resolve) => { resolveStale = resolve; }),
+      update: () => {},
+      dispose: () => {},
+    };
+
+    stage.addView(9, { top: 0, left: 0, width: 100, height: 100 }, staleScene);
+    stage.removeView(9);
+    stage.addView(9, { top: 0, left: 0, width: 100, height: 100 }, trackedScene());
+    await flush();
+    resolveStale();
+    await flush();
+
+    expect(onViewReady).toHaveBeenCalledTimes(1);
+    expect(onViewReady).toHaveBeenCalledWith(9);
+  });
+
   it("addView calls module.init with a ViewContext built from the current frame", async () => {
     const renderer = mockRenderer();
     const frame = baseFrame();
@@ -111,6 +211,36 @@ describe("Stage.addView / removeView", () => {
 
     stage.updateRect(1, { top: 0, left: 0, width: 400, height: 400 });
     expect(scene.initCount).toBe(1); // unchanged — updateRect isn't a re-init
+  });
+
+  it("forwards a main-thread progress to onProgress instead of the rect-derived value", async () => {
+    const seen: number[] = [];
+    const scene: SceneModule = {
+      init: () => {},
+      update: () => {},
+      dispose: () => {},
+      onProgress: (p) => seen.push(p),
+    };
+    const stage = new Stage(mockRenderer(), baseFrame());
+    // A pinned, viewport-tall rect: rect-derived progress is a constant 0.5
+    // no matter how far the page has scrolled, which is exactly the sticky
+    // failure the override exists to fix.
+    const pinned: RectData = { top: 0, left: 0, width: 800, height: 800 };
+    stage.addView(1, pinned, scene);
+    await flush();
+
+    stage.updateRect(1, pinned);
+    stage.update(0.016);
+    expect(seen.at(-1)).toBeCloseTo(0.5, 6);
+
+    stage.updateRect(1, pinned, 0.83);
+    stage.update(0.016);
+    expect(seen.at(-1)).toBe(0.83);
+
+    // Omitting it again drops back to the rect.
+    stage.updateRect(1, pinned);
+    stage.update(0.016);
+    expect(seen.at(-1)).toBeCloseTo(0.5, 6);
   });
 });
 
@@ -328,5 +458,381 @@ describe("Stage.reinit — context-loss restore contract", () => {
 
     await stage.reinit();
     expect(scene.initCount).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additive post-M0-freeze seams: the GPGPU renderer + FloatSupport handed to
+// scenes through ViewContext, and the post chain Stage now actually drives.
+// ---------------------------------------------------------------------------
+
+/** A RendererLike that also answers the render-to-texture calls Gpgpu.compute() makes. */
+function gpgpuCapableRenderer(): RendererLike & { targets: unknown[] } {
+  const targets: unknown[] = [];
+  return {
+    ...mockRenderer(),
+    targets,
+    setRenderTarget: (target: unknown) => targets.push(target),
+  } as RendererLike & { targets: unknown[] };
+}
+
+/** A fake WebGL context whose extension list decides the FloatSupport verdict. */
+function fakeGlContext(extensions: string[], webgl2 = true): WebGL2RenderingContext {
+  const ctx: Record<string, unknown> = {
+    getExtension: (name: string) => (extensions.includes(name) ? {} : null),
+  };
+  if (webgl2) ctx.texStorage2D = () => {};
+  return ctx as unknown as WebGL2RenderingContext;
+}
+
+function recordingPost(overrides: Partial<PostLike> = {}) {
+  const calls: string[] = [];
+  const state = { enabled: true };
+  const post = {
+    calls,
+    state,
+    get isEnabled() {
+      return state.enabled;
+    },
+    setSceneCamera: (scene: THREE.Scene, camera: THREE.Camera) => {
+      calls.push(`setSceneCamera(${scene.uuid === camera.uuid ? "same" : "pair"})`);
+      post.lastTarget = { scene, camera };
+    },
+    setPolicy: (quality: string, reducedMotion: boolean) => calls.push(`setPolicy(${quality},${reducedMotion})`),
+    setSize: (w: number, h: number) => calls.push(`setSize(${w},${h})`),
+    render: (dt: number, fallback: () => void) => {
+      calls.push(`render(${dt})`);
+      if (!state.enabled) fallback();
+    },
+    dispose: () => calls.push("dispose"),
+    lastTarget: null as { scene: THREE.Scene; camera: THREE.Camera } | null,
+    ...overrides,
+  };
+  return post;
+}
+
+const FULL_RECT: RectData = { top: 0, left: 0, width: 800, height: 800 };
+
+describe("Stage — ViewContext GPGPU seam (types.ts ViewContext.renderer / .floatSupport)", () => {
+  it("hands a scene the narrow render-to-texture seam when the renderer has one", async () => {
+    const renderer = gpgpuCapableRenderer();
+    const stage = new Stage(renderer, baseFrame());
+    let seen: ViewContext | null = null;
+    stage.addView(1, FULL_RECT, {
+      init: (ctx) => {
+        seen = ctx;
+      },
+      update: () => {},
+      dispose: () => {},
+    });
+    await flush();
+
+    // Narrow on purpose: it is the Gpgpu seam, not the whole renderer, but it
+    // must be the SAME object so a compute pass targets the live context.
+    expect(seen!.renderer).toBe(renderer);
+    seen!.renderer!.setRenderTarget(null);
+    expect(renderer.targets).toEqual([null]);
+  });
+
+  it("omits the seam for a plain RendererLike mock, so a scene knows to hold its pose", async () => {
+    const stage = new Stage(mockRenderer(), baseFrame()); // no setRenderTarget
+    let seen: ViewContext | null = null;
+    stage.addView(1, FULL_RECT, {
+      init: (ctx) => {
+        seen = ctx;
+      },
+      update: () => {},
+      dispose: () => {},
+    });
+    await flush();
+
+    expect(seen!.renderer).toBeUndefined();
+  });
+
+  it("probes the float verdict off the renderer's context, once, and shares it with every view", async () => {
+    let probes = 0;
+    const renderer: RendererLike = {
+      ...mockRenderer(),
+      getContext: () => {
+        probes++;
+        return fakeGlContext(["EXT_color_buffer_float"]);
+      },
+    };
+    const stage = new Stage(renderer, baseFrame());
+    const seen: (string | undefined)[] = [];
+    const spy = (): SceneModule => ({
+      init: (ctx) => {
+        seen.push(ctx.floatSupport);
+      },
+      update: (_dt, ctx) => {
+        seen.push(ctx.floatSupport);
+      },
+      dispose: () => {},
+    });
+
+    stage.addView(1, FULL_RECT, spy());
+    stage.addView(2, { top: 0, left: 0, width: 100, height: 100 }, spy());
+    await flush();
+    stage.update(0.016);
+
+    expect(seen).toEqual(["float", "float", "float", "float"]);
+    expect(probes).toBe(1); // memoized — a capability of the context, not of a view
+  });
+
+  it("reports half-float when only half-float targets are renderable", async () => {
+    const renderer: RendererLike = {
+      ...mockRenderer(),
+      getContext: () => fakeGlContext(["EXT_color_buffer_half_float"]),
+    };
+    const stage = new Stage(renderer, baseFrame());
+    expect(stage.floatSupport).toBe("half-float");
+  });
+
+  it("reports 'none' — never a hopeful 'float' — when the renderer cannot hand over a context", () => {
+    const stage = new Stage(mockRenderer(), baseFrame()); // no getContext
+    expect(stage.floatSupport).toBe("none");
+  });
+
+  it("reports 'none' for a context with no renderability extensions at all", () => {
+    const renderer: RendererLike = { ...mockRenderer(), getContext: () => fakeGlContext([]) };
+    expect(new Stage(renderer, baseFrame()).floatSupport).toBe("none");
+  });
+
+  it("prefers an explicitly injected verdict over probing", () => {
+    let probes = 0;
+    const renderer: RendererLike = {
+      ...mockRenderer(),
+      getContext: () => {
+        probes++;
+        return fakeGlContext(["EXT_color_buffer_float"]);
+      },
+    };
+    const stage = new Stage(renderer, baseFrame(), { floatSupport: "none" });
+
+    expect(stage.floatSupport).toBe("none");
+    expect(probes).toBe(0);
+  });
+
+  it("re-probes after a context restore, because a downgraded context can lose float targets", async () => {
+    let extensions = ["EXT_color_buffer_float"];
+    const renderer: RendererLike = { ...mockRenderer(), getContext: () => fakeGlContext(extensions) };
+    const stage = new Stage(renderer, baseFrame());
+    stage.addView(1, FULL_RECT, trackedScene());
+    await flush();
+    expect(stage.floatSupport).toBe("float");
+
+    extensions = []; // software fallback context after the loss
+    await stage.reinit();
+
+    expect(stage.floatSupport).toBe("none");
+  });
+});
+
+describe("Stage.render — post chain gating (a shared composer cannot serve N scissored views)", () => {
+  function postStage(opts: { views: number; post?: boolean; rect?: RectData } = { views: 1 }) {
+    const renderer = mockRenderer();
+    const post = recordingPost();
+    const created: unknown[] = [];
+    const stage = new Stage(renderer, baseFrame(), {
+      route: "/",
+      createPost: (input) => {
+        created.push(input);
+        return post as unknown as PostLike;
+      },
+    });
+    return { renderer, post, created, stage };
+  }
+
+  it("runs a single full-canvas opted-in view through the composer instead of the scissored path", async () => {
+    const { renderer, post, created, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    renderer.calls.length = 0;
+    stage.update(0.02);
+    stage.render();
+
+    expect(created).toHaveLength(1);
+    expect(post.calls).toContain("render(0.02)"); // dt carried over from update()
+    // The composer owns the whole buffer: scissoring would clip its fullscreen
+    // quads and clears, and a stale per-view viewport would squeeze its output.
+    expect(renderer.calls).toContain("setScissorTest(false)");
+    expect(renderer.calls).toContain("setViewport(0,0,800,800)");
+    expect(renderer.calls).not.toContain("render"); // no direct per-view draw
+  });
+
+  it("points the composer at the view actually being rendered", async () => {
+    const { post, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+    stage.render();
+
+    expect(post.lastTarget).not.toBeNull();
+    expect(post.lastTarget!.scene).toBeInstanceOf(THREE.Scene);
+    expect(post.lastTarget!.camera).toBeInstanceOf(THREE.PerspectiveCamera);
+  });
+
+  it("refuses post when a second view is also on screen, and draws both scissored instead", async () => {
+    const { renderer, post, created, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    stage.addView(2, { top: 0, left: 0, width: 200, height: 200 }, trackedScene());
+    await flush();
+
+    renderer.calls.length = 0;
+    stage.render();
+
+    expect(created).toHaveLength(0); // the chain is never even built
+    expect(post.calls).toEqual([]);
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(2);
+    expect(renderer.calls).toContain("setScissorTest(true)");
+  });
+
+  it("refuses post for a view that never opted in", async () => {
+    const { renderer, created, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene()); // no { post: true }
+    await flush();
+
+    renderer.calls.length = 0;
+    stage.render();
+
+    expect(created).toHaveLength(0);
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(1);
+  });
+
+  it("refuses post for an opted-in view that does not cover the canvas", async () => {
+    const { renderer, created, stage } = postStage();
+    // Half-height rect: a composer would stretch it over the whole canvas.
+    stage.addView(1, { top: 0, left: 0, width: 800, height: 400 }, trackedScene(), { post: true });
+    await flush();
+
+    renderer.calls.length = 0;
+    stage.render();
+
+    expect(created).toHaveLength(0);
+    expect(renderer.calls).toContain("setScissorTest(true)");
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(1);
+  });
+
+  it("falls back to the scissored path when the chain reports itself disabled (low tier / reduced motion)", async () => {
+    const { renderer, post, stage } = postStage();
+    post.state.enabled = false;
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    renderer.calls.length = 0;
+    stage.render();
+
+    // isEnabled is consulted BEFORE handing the frame over, so the composer's
+    // own fallback never even runs — the view is drawn scissored as usual.
+    expect(post.calls).not.toContain("render(0)");
+    expect(renderer.calls).toContain("setScissorTest(true)");
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(1);
+  });
+
+  it("re-applies the live quality/reduced-motion policy every frame", async () => {
+    const { post, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    stage.render();
+    stage.setFrame(baseFrame({ quality: "low", reducedMotion: true }));
+    stage.render();
+
+    expect(post.calls.filter((c) => c.startsWith("setPolicy"))).toEqual([
+      "setPolicy(high,false)",
+      "setPolicy(low,true)",
+    ]);
+  });
+
+  it("sizes the chain in device pixels, once per size change", async () => {
+    const { post, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    stage.render();
+    stage.render(); // same size — must not re-size
+    stage.setFrame(baseFrame({ size: { width: 800, height: 800, dpr: 2 } }));
+    stage.render();
+
+    expect(post.calls.filter((c) => c.startsWith("setSize"))).toEqual(["setSize(800,800)", "setSize(1600,1600)"]);
+  });
+
+  it("clamps DPR the same way gl/renderer.ts's setSize does, so the composer matches the drawing buffer", async () => {
+    const { post, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+    // dpr 3 on a high tier is clamped to 2; on the low tier it would be 1.5.
+    stage.setFrame(baseFrame({ size: { width: 400, height: 400, dpr: 3 } }));
+    stage.render();
+
+    expect(post.calls.filter((c) => c.startsWith("setSize"))).toEqual(["setSize(800,800)"]);
+  });
+
+  it("builds the chain at most once and never retries a factory that declined", async () => {
+    let calls = 0;
+    const renderer = mockRenderer();
+    const stage = new Stage(renderer, baseFrame(), {
+      route: "/",
+      createPost: () => {
+        calls++;
+        return null; // e.g. the renderer cannot back an EffectComposer
+      },
+    });
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    stage.render();
+    stage.render();
+    stage.render();
+
+    expect(calls).toBe(1);
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(3); // still drawn, scissored
+  });
+
+  it("reports a throwing factory through onError and keeps rendering without post", async () => {
+    const boom = new Error("EffectComposer needs a real WebGLRenderer");
+    const onError = vi.fn();
+    const renderer = mockRenderer();
+    const stage = new Stage(renderer, baseFrame(), {
+      route: "/",
+      onError,
+      createPost: () => {
+        throw boom;
+      },
+    });
+    stage.addView(4, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    expect(() => stage.render()).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(boom, 4);
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(1);
+  });
+
+  it("declines post entirely for a plain RendererLike mock under the DEFAULT factory", async () => {
+    // The default factory must not hand a mock to postprocessing — that throws
+    // on the first eligible frame. This is the path every existing test takes.
+    const renderer = mockRenderer();
+    const stage = new Stage(renderer, baseFrame(), { route: "/" });
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+
+    expect(() => stage.render()).not.toThrow();
+    expect(stage.postChain).toBeNull();
+    expect(renderer.calls.filter((c) => c === "render")).toHaveLength(1);
+  });
+
+  it("disposes the chain with the Stage, and does not rebuild it afterwards", async () => {
+    const { post, created, stage } = postStage();
+    stage.addView(1, FULL_RECT, trackedScene(), { post: true });
+    await flush();
+    stage.render();
+    expect(stage.postChain).not.toBeNull();
+
+    stage.dispose();
+
+    expect(post.calls).toContain("dispose");
+    expect(stage.postChain).toBeNull();
+    stage.render();
+    expect(created).toHaveLength(1); // not rebuilt after disposal
   });
 });

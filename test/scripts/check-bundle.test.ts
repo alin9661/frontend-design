@@ -15,11 +15,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkBudgets, firstLoadJsBytes } from "@/scripts/check-bundle";
+import { checkBudgets, firstLoadJsBytes, routeChunks } from "@/scripts/check-bundle";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 
-describe("firstLoadJsBytes", () => {
+describe("scripts/check-bundle.ts > firstLoadJsBytes", () => {
   let dir: string;
 
   beforeEach(() => {
@@ -61,7 +61,67 @@ describe("firstLoadJsBytes", () => {
   });
 });
 
-describe("checkBudgets", () => {
+describe("scripts/check-bundle.ts > routeChunks (the root layout's chunks are part of the route)", () => {
+  it("unions the shared layout chunks with the route's own, layout first", () => {
+    // Next emits the root layout's client chunks ONLY under `/layout`, never
+    // under `/page` — but the browser downloads both on the same navigation,
+    // and `next build`'s own First Load JS column counts both. Summing just
+    // the route key under-reports by exactly the amount of client code that
+    // lives in app/layout.tsx's subtree, which is where this project's site
+    // header and sound toggle are.
+    const pages = {
+      "/layout": ["static/chunks/200.js", "static/chunks/app/layout.js"],
+      "/page": ["static/chunks/app/page.js"],
+    };
+
+    expect(routeChunks(pages, "/page")).toEqual([
+      "static/chunks/200.js",
+      "static/chunks/app/layout.js",
+      "static/chunks/app/page.js",
+    ]);
+  });
+
+  it("counts a chunk listed under both keys exactly once", () => {
+    const shared = "static/chunks/framework.js";
+    const pages = {
+      "/layout": [shared, "static/chunks/app/layout.js"],
+      "/page": [shared, "static/chunks/app/page.js"],
+    };
+
+    const chunks = routeChunks(pages, "/page");
+    expect(chunks.filter((file) => file === shared)).toHaveLength(1);
+    expect(chunks).toHaveLength(3);
+  });
+
+  it("still measures a route whose manifest has no layout key at all", () => {
+    expect(routeChunks({ "/page": ["a.js"] }, "/page")).toEqual(["a.js"]);
+    expect(routeChunks({}, "/page")).toEqual([]);
+  });
+
+  it("measures MORE than the route key alone whenever the layout owns chunks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "check-bundle-layout-"));
+    try {
+      writeFileSync(join(dir, "page.js"), "p".repeat(4000));
+      writeFileSync(join(dir, "layout.js"), Array.from({ length: 400 }, () => Math.random().toString(36)).join(""));
+      const manifest = { pages: { "/layout": ["layout.js"], "/page": ["page.js"] } };
+
+      const [result] = checkBudgets(
+        manifest,
+        [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }],
+        dir,
+      );
+
+      // The regression: the gate reported only `page.js` and stayed green
+      // while the layout grew without limit.
+      expect(result!.measuredBytes).toBeGreaterThan(firstLoadJsBytes(dir, ["page.js"]));
+      expect(result!.measuredBytes).toBe(firstLoadJsBytes(dir, ["layout.js", "page.js"]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("scripts/check-bundle.ts > checkBudgets", () => {
   let dir: string;
 
   beforeEach(() => {
@@ -93,6 +153,7 @@ describe("checkBudgets", () => {
 
     expect(result!.ok).toBe(false);
     expect(result!.measuredBytes).toBeGreaterThan(10);
+    expect(result!.budgetBytes).toBe(10);
   });
 
   it("checks every budgeted route independently in one call", () => {
@@ -115,22 +176,112 @@ describe("checkBudgets", () => {
     expect(results.every((r) => r.ok)).toBe(true);
   });
 
-  it("throws a clear error when the manifest has no entry for a budgeted route", () => {
-    const manifest = { pages: {} };
-    expect(() =>
-      checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir)
-    ).toThrow(/no entry for "\/page"/);
+  it("returns a descriptive failure with manifest paths and found keys when a budgeted route is absent", () => {
+    const manifest = {
+      pages: { "/layout": ["layout.js"], "/_app": ["app.js"] },
+      sources: [
+        { path: "/fixture/.next/app-build-manifest.json", keys: ["/layout"] },
+        { path: "/fixture/.next/build-manifest.json", keys: ["/_app"] },
+      ],
+    };
+
+    const [result] = checkBudgets(
+      manifest,
+      [{ route: "/deep-wave", manifestKey: "/deep-wave/page", budgetBytes: 1_000_000 }],
+      dir
+    );
+
+    expect(result!.ok).toBe(false);
+    expect(result!.measuredBytes).toBeNull();
+    expect(result!.error).toContain("/fixture/.next/app-build-manifest.json");
+    expect(result!.error).toContain("/fixture/.next/build-manifest.json");
+    expect(result!.error).toContain('found keys: "/layout"');
+    expect(result!.error).toContain('found keys: "/_app"');
   });
 
-  it("design review item E11: wraps a missing chunk's read failure with route/manifest-key context on top of the chunk-level detail", () => {
+  it("resolves the URL-route key emitted by build-manifest.json as an alternative manifest shape", () => {
+    writeFileSync(join(dir, "deep-wave.js"), "x".repeat(100));
+    const manifest = {
+      pages: { "/deep-wave": ["deep-wave.js"] },
+      sources: [{ path: "/fixture/.next/build-manifest.json", keys: ["/deep-wave"] }],
+    };
+
+    const [result] = checkBudgets(
+      manifest,
+      [{ route: "/deep-wave", manifestKey: "/deep-wave/page", budgetBytes: 1_000_000 }],
+      dir
+    );
+
+    expect(result!.ok).toBe(true);
+    expect(result!.resolvedManifestKey).toBe("/deep-wave");
+    expect(result!.measuredBytes).toBeGreaterThan(0);
+  });
+
+  it("fails (rather than silently passing at 0 bytes) when the resolved key lists no .js chunks", () => {
+    // A manifest shape change that leaves a route key present but empty
+    // would measure 0 bytes and sail under every budget — a tooling break
+    // reported as a green gate.
+    const manifest = { pages: { "/deep-wave/page": [] } };
+
+    const [result] = checkBudgets(
+      manifest,
+      [{ route: "/deep-wave", manifestKey: "/deep-wave/page", budgetBytes: 1_000_000 }],
+      dir
+    );
+
+    expect(result!.ok).toBe(false);
+    expect(result!.measuredBytes).toBeNull();
+    expect(result!.error).toContain("lists no .js chunks");
+    expect(result!.error).toContain("(empty)");
+  });
+
+  it("fails when the resolved key lists only non-JS entries (css-only), naming what it did list", () => {
+    const manifest = { pages: { "/page": ["static/css/app.css"] } };
+
+    const [result] = checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir);
+
+    expect(result!.ok).toBe(false);
+    expect(result!.measuredBytes).toBeNull();
+    expect(result!.error).toContain("static/css/app.css");
+  });
+
+  it("still measures normally when the resolved key mixes .css with real .js chunks", () => {
+    writeFileSync(join(dir, "home.js"), "x".repeat(100));
+    const manifest = { pages: { "/page": ["static/css/app.css", "home.js"] } };
+
+    const [result] = checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir);
+
+    expect(result!.ok).toBe(true);
+    expect(result!.measuredBytes).toBeGreaterThan(0);
+  });
+
+  it("reports a descriptive failure instead of throwing when the manifest has no pages map at all", () => {
+    // Malformed/partial build output: `pages` absent entirely. The old
+    // lookup would blow up; the gate must still name what it inspected.
+    const manifest = { pages: undefined as unknown as Record<string, string[]> };
+
+    const [result] = checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir);
+
+    expect(result!.ok).toBe(false);
+    expect(result!.measuredBytes).toBeNull();
+    expect(result!.error).toContain('cannot resolve budgeted route "/"');
+    expect(result!.error).toContain("found keys: (none)");
+  });
+
+  it("design review item E11: reports a missing chunk with route/manifest-key context on top of the chunk-level detail", () => {
     const manifest = { pages: { "/page": ["does-not-exist.js"] } };
-    expect(() =>
-      checkBudgets(manifest, [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }], dir)
-    ).toThrow(/route "\/"[\s\S]*manifest key "\/page"[\s\S]*does-not-exist\.js/);
+    const [result] = checkBudgets(
+      manifest,
+      [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }],
+      dir
+    );
+
+    expect(result!.ok).toBe(false);
+    expect(result!.error).toMatch(/route "\/"[\s\S]*manifest key "\/page"[\s\S]*does-not-exist\.js/);
   });
 });
 
-describe("firstLoadJsBytes — missing-chunk ENOENT context (design review item E11)", () => {
+describe("scripts/check-bundle.ts > firstLoadJsBytes missing-chunk context", () => {
   let dir: string;
 
   beforeEach(() => {
@@ -151,7 +302,7 @@ describe("firstLoadJsBytes — missing-chunk ENOENT context (design review item 
   });
 });
 
-describe("check-bundle.ts CLI — subprocess against a fixture .next dir via NEXT_DIR (design review item E11)", () => {
+describe("scripts/check-bundle.ts > CLI subprocess via NEXT_DIR", () => {
   let dir: string;
 
   beforeEach(() => {
@@ -167,6 +318,7 @@ describe("check-bundle.ts CLI — subprocess against a fixture .next dir via NEX
       join(dir, "app-build-manifest.json"),
       JSON.stringify({ pages: { "/page": homeFiles, "/deep-wave/page": deepWaveFiles } })
     );
+    writeFileSync(join(dir, "build-manifest.json"), JSON.stringify({ pages: { "/_app": [] } }));
   }
 
   function runCli(): { exitCode: number | null; stdout: string; stderr: string } {
@@ -205,6 +357,50 @@ describe("check-bundle.ts CLI — subprocess against a fixture .next dir via NEX
     const result = runCli();
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("exceeded their First Load JS budget");
+    expect(result.stdout).toMatch(/FAIL\s+\/\s+300\.1 kB \/ 165\.0 kB budget/);
+    expect(result.stderr).toContain("one or more route budget checks failed");
+  });
+
+  it("reports all resolvable routes plus an actionable failure when one route key is absent", () => {
+    writeFileSync(join(dir, "home.js"), "x".repeat(100));
+    writeFileSync(
+      join(dir, "app-build-manifest.json"),
+      JSON.stringify({ pages: { "/layout": [], "/page": ["home.js"] } })
+    );
+    writeFileSync(join(dir, "build-manifest.json"), JSON.stringify({ pages: { "/_app": [] } }));
+
+    const result = runCli();
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toMatch(/PASS\s+\//);
+    expect(result.stderr).toContain("[check-bundle] FAIL  /deep-wave");
+    expect(result.stderr).toContain(join(dir, "app-build-manifest.json"));
+    expect(result.stderr).toContain('found keys: "/layout", "/page"');
+    expect(result.stderr).toContain(join(dir, "build-manifest.json"));
+    expect(result.stderr).toContain('found keys: "/_app"');
+    expect(result.stderr).not.toContain("at checkBudgets");
+  });
+
+  it("names the offending manifest when its JSON is unparseable, instead of a bare parse stack", () => {
+    writeFileSync(join(dir, "app-build-manifest.json"), "{ not json");
+    writeFileSync(join(dir, "build-manifest.json"), JSON.stringify({ pages: { "/_app": [] } }));
+
+    const result = runCli();
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("could not parse");
+    expect(result.stderr).toContain(join(dir, "app-build-manifest.json"));
+  });
+
+  it("names the offending manifest when it parses but carries no pages map", () => {
+    writeFileSync(join(dir, "app-build-manifest.json"), JSON.stringify({ pages: { "/page": [] } }));
+    writeFileSync(join(dir, "build-manifest.json"), JSON.stringify({ rootMainFiles: [] }));
+
+    const result = runCli();
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('has no "pages" map');
+    expect(result.stderr).toContain(join(dir, "build-manifest.json"));
+    expect(result.stderr).toContain("rootMainFiles");
   });
 });

@@ -31,3 +31,5 @@ next-env.d.ts
 
 # QA screenshots dropped at repo root by browser automation
 /*.png
+.vercel/
+.env*.local

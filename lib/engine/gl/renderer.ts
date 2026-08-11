@@ -10,6 +10,7 @@
 
 import * as THREE from "three";
 import type { QualityTier, RendererLike } from "../types";
+export { detectQualityTier, type QualityProbe } from "../core/quality";
 
 /** DPR is clamped to 2 on "high"/"medium" tiers, 1.5 on "low" (design doc §4). */
 export const MAX_DPR_DEFAULT = 2;
@@ -38,31 +39,6 @@ export function setSize(
 ): void {
   const clamped = clampDpr(dpr, tier);
   renderer.setSize(Math.max(1, Math.round(width * clamped)), Math.max(1, Math.round(height * clamped)), false);
-}
-
-/** Pure inputs for tier detection — every field is plain data (worker-safe). */
-export interface QualityProbe {
-  hardwareConcurrency: number;
-  dpr: number;
-  /** Optional measured ms of a first probe frame; omit if not yet measured. */
-  firstFrameMs?: number;
-}
-
-/**
- * Pure quality-tier heuristic — no DOM/navigator reads inside; the caller
- * (react/ on main thread, worker/host.ts off it) gathers the probe values
- * and passes them in. Usable in unit tests and in a Web Worker alike.
- */
-export function detectQualityTier(probe: QualityProbe): QualityTier {
-  const { hardwareConcurrency, dpr, firstFrameMs } = probe;
-
-  if (hardwareConcurrency <= 2 || dpr > 2.5 || (firstFrameMs !== undefined && firstFrameMs > 32)) {
-    return "low";
-  }
-  if (hardwareConcurrency <= 4 || (firstFrameMs !== undefined && firstFrameMs > 18)) {
-    return "medium";
-  }
-  return "high";
 }
 
 export interface RendererOptions {

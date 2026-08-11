@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Anton, Space_Grotesk } from "next/font/google";
+import SiteHeader from "@/components/SiteHeader";
+import { SectionInkProvider } from "@/lib/section-ink";
 import Providers from "./providers";
 import "./globals.css";
 
@@ -48,7 +50,12 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${anton.variable} ${spaceGrotesk.variable}`}>
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <SectionInkProvider>
+            <SiteHeader />
+            {children}
+          </SectionInkProvider>
+        </Providers>
       </body>
     </html>
   );

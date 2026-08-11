@@ -23,13 +23,13 @@ import {
 } from "./test-utils/fake-engine";
 
 const createEngineDepsMock = vi.fn((_reducedMotion: boolean) => createFakeEngineDeps());
-const { warmScene } = vi.hoisted(() => ({ warmScene: vi.fn() }));
+const { warmOriginFilm } = vi.hoisted(() => ({ warmOriginFilm: vi.fn() }));
 
 vi.mock("@/lib/engine/react/create-engine", () => ({
   createEngineDeps: (reducedMotion: boolean) => createEngineDepsMock(reducedMotion),
 }));
 vi.mock("@/lib/engine/worker/scene-registry", () => ({
-  sceneRegistry: { "hero-can": warmScene },
+  sceneRegistry: { "origin-film": warmOriginFilm },
 }));
 
 // Imported AFTER the mock so EngineProvider picks it up.
@@ -52,7 +52,7 @@ function ViewProbe({ sceneId }: { sceneId: SceneId }) {
 }
 
 function PostViewProbe() {
-  const ref = useView("hero-can", { sticky: true, post: true });
+  const ref = useView("origin-film", { sticky: true, post: true });
   return (
     <div data-testid="range" data-rect-top={0} data-rect-height={12000}>
       <div ref={ref} data-testid="post-view" data-rect-top={0} data-rect-height={1000} />
@@ -69,7 +69,7 @@ function latestDeps() {
 beforeEach(() => {
   resetFakeEngineCounts();
   createEngineDepsMock.mockClear();
-  warmScene.mockReset().mockResolvedValue({ dispose: vi.fn() });
+  warmOriginFilm.mockReset().mockResolvedValue({ dispose: vi.fn() });
 });
 
 describe("@/lib/engine/react/EngineProvider — mount", () => {
@@ -144,9 +144,9 @@ describe("@/lib/engine/react/EngineProvider — mount", () => {
     });
   });
 
-  it("starts the scene-chunk cache warm before host.init begins waiting for readiness", () => {
+  it("starts the origin-film cache warm before host.init begins waiting for readiness", () => {
     const calls: string[] = [];
-    warmScene.mockImplementationOnce(() => {
+    warmOriginFilm.mockImplementationOnce(() => {
       calls.push("warm");
       return Promise.resolve({ dispose: vi.fn() });
     });
@@ -170,7 +170,7 @@ describe("@/lib/engine/react/EngineProvider — mount", () => {
   });
 
   it("contains a rejected scene warm-up without rejecting init or changing provider status", async () => {
-    warmScene.mockRejectedValueOnce(new Error("cache warm failed"));
+    warmOriginFilm.mockRejectedValueOnce(new Error("cache warm failed"));
 
     render(
       <EngineProvider>
@@ -341,7 +341,7 @@ describe("@/lib/engine/react/EngineProvider — registerView/unregisterView via 
     await waitFor(() => expect(deps.host.addView).toHaveBeenCalledTimes(1));
     expect(deps.host.addView).toHaveBeenCalledWith(
       expect.any(Number),
-      "hero-can",
+      "origin-film",
       expect.any(Object),
       { post: true },
     );
@@ -398,7 +398,7 @@ function trackFromDataAttrs(el: Element) {
 }
 
 function StickyViewProbe() {
-  const ref = useView("hero-can", { sticky: true });
+  const ref = useView("origin-film", { sticky: true });
   return (
     // The 12000px-tall scroll range, exactly as OriginStory's mobile <section> is.
     <div data-testid="range" data-rect-top={1000} data-rect-height={12000}>
@@ -517,7 +517,7 @@ describe("@/lib/engine/react/EngineProvider — sticky views", () => {
 
     expect(deps.host.addView).toHaveBeenCalledWith(
       expect.any(Number),
-      "hero-can",
+      "origin-film",
       expect.objectContaining({ top: 6500, height: 1000 }),
       { post: false }
     );

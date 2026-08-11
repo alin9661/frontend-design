@@ -77,9 +77,10 @@ describe("engine contracts — shared types compile and are constructible", () =
     expect(splat.colors.length).toBe(4);
   });
 
-  it("SceneId union covers exactly the 7 documented scene ids", () => {
+  it("SceneId union covers exactly the 8 documented scene ids", () => {
     const ids: SceneId[] = [
       "hero-can",
+      "origin-film",
       "exploded",
       "particles",
       "pointer-field",
@@ -87,8 +88,8 @@ describe("engine contracts — shared types compile and are constructible", () =
       "picker",
       "placeholder",
     ];
-    expect(ids).toHaveLength(7);
-    expect(new Set(ids).size).toBe(7);
+    expect(ids).toHaveLength(8);
+    expect(new Set(ids).size).toBe(8);
   });
 
   it("RendererLike / HostInit / RenderHost / TrackKeyframe / Ease are structurally satisfiable", () => {
@@ -373,6 +374,7 @@ describe("lib/scenes/placeholder — SceneModule shape", () => {
     const ids = [
       "placeholder",
       "hero-can",
+      "origin-film",
       "exploded",
       "particles",
       "pointer-field",

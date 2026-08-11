@@ -1,10 +1,15 @@
 # Mateína Landing Page
 
 An unofficial fan concept landing page for [Mateína](https://drinkmateina.com) — not
-affiliated with or endorsed by the brand. A full-viewport hero with a floating parallax
-scene, an auto-rotating flavor showcase across all five Energy Brews, and scroll-triggered
-benefits/social-proof/footer sections, all built with hand-drawn SVG art (no external
-images).
+affiliated with or endorsed by the brand. A cinematic plant-to-drink origin story follows
+one animated line from the forests of Misiones through leaf and brew to the finished can.
+An in-house WebGL layer adds instanced leaves, a custom brewed-energy shader, and the
+project's procedural 3D can while preserving the complete SVG experience as a fallback.
+The story is followed by an auto-rotating showcase of all five Energy Brews and
+scroll-triggered benefits/social-proof/footer sections. The origin film optionally loads
+`public/origin-assets.glb` for its hand and machine, falling back to procedural geometry
+when that uncommitted file is absent; the rest remains hand-drawn or procedural art. See
+[the Blender authoring brief](docs/origin-assets-blender-brief.md) for how to make one.
 
 ## Stack
 

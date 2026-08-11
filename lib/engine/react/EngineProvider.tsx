@@ -38,8 +38,9 @@ import {
   type ReactNode,
 } from "react";
 import type { RectData, SceneId, TrackedRect, WorkerToMain } from "@/lib/engine/types";
-import { detectQualityTier } from "@/lib/engine/gl/renderer";
+import { detectQualityTier } from "@/lib/engine/core/quality";
 import { packFrameState } from "@/lib/engine/worker/protocol";
+import { sceneRegistry } from "@/lib/engine/worker/scene-registry";
 import { TickOrder } from "@/lib/engine/types";
 import { createEngineDeps, type EngineDeps } from "./create-engine";
 import {
@@ -47,8 +48,10 @@ import {
   type EngineContextValue,
   type EngineStats,
   type EngineStatus,
+  type RegisterViewOptions,
 } from "./engine-context";
-import GlCanvas from "./GlCanvas";
+import GlCanvas, { type GlCanvasHandle } from "./GlCanvas";
+import RisoGrainOverlay from "./RisoGrainOverlay";
 
 export interface EngineProviderProps {
   children: ReactNode;
@@ -58,15 +61,69 @@ interface ViewEntry {
   sceneId: SceneId;
   el: HTMLElement;
   tracked: TrackedRect | null;
+  /** Non-null only for `sticky` views: the taller scroll-range element and
+   * its own tracked rect. See stickyFrame() below. */
+  rangeEl: HTMLElement | null;
+  range: TrackedRect | null;
+  /** This view asked for the shared post chain — see RegisterViewOptions.post.
+   * Kept on the entry (not just passed through) so a view registered before
+   * `host.init()` resolved still opts in when the queue is flushed. */
+  post: boolean;
 }
 
 function toRectData(t: TrackedRect): RectData {
   return { top: t.top, left: t.left, width: t.width, height: t.height };
 }
 
+/**
+ * Per-frame rect + progress for a `position: sticky; top: 0` view.
+ *
+ * `sticky` is the element's STATIC (unstuck) measurement — correct width and
+ * height, useless top. `range` is the tall parent it is pinned within. While
+ * the page is scrolled inside the range the element's real document top is
+ * exactly `scrollY`; before and after it is clamped to the ends of its travel.
+ * Progress runs 0 at "range top hits viewport top" to 1 at "range bottom hits
+ * viewport bottom" — identical to framer-motion's
+ * `useScroll({ offset: ["start start", "end end"] })` on the same element, so
+ * a DOM film and a GL film sharing a section stay frame-locked.
+ *
+ * Pure arithmetic over two already-measured rects: no layout read per frame.
+ */
+export function stickyFrame(
+  sticky: RectData,
+  range: RectData,
+  scrollY: number
+): { rect: RectData; progress: number } {
+  const travel = Math.max(0, range.height - sticky.height);
+  const top = Math.min(Math.max(scrollY, range.top), range.top + travel);
+  const progress = travel > 0 ? Math.min(1, Math.max(0, (scrollY - range.top) / travel)) : 0;
+  return {
+    rect: { top, left: sticky.left, width: sticky.width, height: sticky.height },
+    progress,
+  };
+}
+
 function detectReducedMotion(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * The route this canvas is being created for, for gl/post.ts's route gate.
+ *
+ * `location.pathname` rather than next/navigation's `usePathname()`: the
+ * engine is constructed exactly once, in a mount effect, and the route it was
+ * mounted on is the one its Stage (and therefore its post chain) belongs to —
+ * a client-side navigation tears this provider down and builds a new one, so
+ * subscribing to route changes would only add a dependency and a re-render for
+ * a value that cannot change under it.
+ *
+ * `undefined` off-DOM is deliberate and is NOT the same as `""`: gl/post.ts
+ * treats an unset route as "caller does not know where it is" (no grain),
+ * while `""` normalises to `"/"` and would claim the landing page.
+ */
+function detectRoute(): string | undefined {
+  return typeof location === "undefined" ? undefined : location.pathname;
 }
 
 function detectDpr(): number {
@@ -78,8 +135,18 @@ function scrollLimit(): number {
   return Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 }
 
+/** The rect a view is first added with. Sticky views get their pinned rect
+ * for the current scroll position rather than their unstuck measurement, so
+ * `SceneModule.init()` sees the same box the first rendered frame will use. */
+function initialRect(entry: { tracked: TrackedRect; range: TrackedRect | null }): RectData {
+  const sticky = toRectData(entry.tracked);
+  if (!entry.range) return sticky;
+  const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
+  return stickyFrame(sticky, toRectData(entry.range), scrollY).rect;
+}
+
 export default function EngineProvider({ children }: EngineProviderProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = useRef<GlCanvasHandle | null>(null);
   const depsRef = useRef<EngineDeps | null>(null);
   const hostReadyRef = useRef(false);
   const viewIdCounterRef = useRef(0);
@@ -93,6 +160,12 @@ export default function EngineProvider({ children }: EngineProviderProps) {
   const [hostMode, setHostMode] = useState<"worker" | "main" | null>(null);
   const [quality, setQuality] = useState<ReturnType<typeof detectQualityTier> | null>(null);
   const [stats, setStats] = useState<EngineStats | null>(null);
+  const [readyViewIds, setReadyViewIds] = useState<ReadonlySet<number>>(() => new Set());
+  // Mirrors the effect's own `detectReducedMotion()` into render, for the
+  // riso fallback overlay. Starts `false` so the server pass and the first
+  // client render agree; the effect corrects it in the same commit that
+  // detects the quality tier, and the overlay needs both anyway.
+  const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,9 +173,19 @@ export default function EngineProvider({ children }: EngineProviderProps) {
     setStatus("loading");
 
     const reducedMotion = detectReducedMotion();
+    setReducedMotion(reducedMotion);
+    // Cache warm only: start a scene-chunk import while the engine core
+    // modules and worker host are being fetched. The worker's matching import
+    // then reuses the browser's warm HTTP cache. Failures are contained because
+    // this speculative request is not an initialization dependency.
+    void sceneRegistry["hero-can"]()
+      .then((scene) => scene.dispose())
+      .catch(() => {});
+
     const deps = createEngineDeps(reducedMotion);
     depsRef.current = deps;
     hostReadyRef.current = false;
+    setReadyViewIds(new Set());
 
     setHostMode(deps.host.mode);
     deps.scroll.resize(scrollLimit());
@@ -113,6 +196,7 @@ export default function EngineProvider({ children }: EngineProviderProps) {
     for (const [viewId, entry] of viewsRef.current) {
       if (!entry.tracked) {
         entry.tracked = deps.rectTracker.track(entry.el);
+        if (entry.rangeEl) entry.range = deps.rectTracker.track(entry.rangeEl);
       }
       pendingViewIdsRef.current.add(viewId);
     }
@@ -125,6 +209,13 @@ export default function EngineProvider({ children }: EngineProviderProps) {
         setProgress(100);
         statusRef.current = "ready";
         setStatus("ready");
+      } else if (msg.type === "VIEW_READY") {
+        setReadyViewIds((current) => {
+          if (current.has(msg.viewId)) return current;
+          const next = new Set(current);
+          next.add(msg.viewId);
+          return next;
+        });
       } else if (msg.type === "STATS") {
         setStats({ ms: msg.ms, drawCalls: msg.drawCalls, splats: msg.splats, sortMs: msg.sortMs });
       }
@@ -141,10 +232,19 @@ export default function EngineProvider({ children }: EngineProviderProps) {
     });
     setQuality(tier);
 
-    const canvas = canvasRef.current;
+    // A DOM canvas is a single-use resource once transferred off-thread.
+    // Every host.init attempt must mint first — including any future retry
+    // from WorkerHost to MainThreadHost — because neither host can reuse a
+    // canvas previously handed to a terminated worker.
+    const canvas = canvasRef.current?.mint();
     const initPromise = canvas
-      ? deps.host.init(canvas, { dpr: detectDpr(), quality: tier, reducedMotion })
-      : Promise.reject(new Error("EngineProvider: <GlCanvas> ref not attached"));
+      ? deps.host.init(canvas, {
+          dpr: detectDpr(),
+          quality: tier,
+          reducedMotion,
+          route: detectRoute(),
+        })
+      : Promise.reject(new Error("EngineProvider: <GlCanvas> surface slot not attached"));
 
     initPromise
       .then(() => {
@@ -153,7 +253,12 @@ export default function EngineProvider({ children }: EngineProviderProps) {
         for (const viewId of pendingViewIdsRef.current) {
           const entry = viewsRef.current.get(viewId);
           if (entry?.tracked) {
-            deps.host.addView(viewId, entry.sceneId, toRectData(entry.tracked));
+            deps.host.addView(
+              viewId,
+              entry.sceneId,
+              initialRect(entry as { tracked: TrackedRect; range: TrackedRect | null }),
+              { post: entry.post },
+            );
           }
         }
         pendingViewIdsRef.current.clear();
@@ -176,14 +281,27 @@ export default function EngineProvider({ children }: EngineProviderProps) {
       const viewportH = typeof window !== "undefined" ? window.innerHeight : 0;
       const views = Array.from(viewsRef.current.entries())
         .filter((entry): entry is [number, ViewEntry & { tracked: TrackedRect }] => entry[1].tracked !== null)
-        .map(([viewId, entry]) => ({
-          viewId,
-          top: entry.tracked.top,
-          left: entry.tracked.left,
-          width: entry.tracked.width,
-          height: entry.tracked.height,
-          progress: entry.tracked.progress(scrollState.current, viewportH),
-        }));
+        .map(([viewId, entry]) => {
+          // A sticky view's tracked rect is its unstuck position, which would
+          // cull it one viewport into a multi-viewport section and pin its
+          // progress at 0.5 — recompute both against the scroll range.
+          if (entry.range) {
+            const { rect, progress } = stickyFrame(
+              toRectData(entry.tracked),
+              toRectData(entry.range),
+              scrollState.current
+            );
+            return { viewId, ...rect, progress };
+          }
+          return {
+            viewId,
+            top: entry.tracked.top,
+            left: entry.tracked.left,
+            width: entry.tracked.width,
+            height: entry.tracked.height,
+            progress: entry.tracked.progress(scrollState.current, viewportH),
+          };
+        });
 
       const packed = packFrameState(
         {
@@ -243,35 +361,49 @@ export default function EngineProvider({ children }: EngineProviderProps) {
       // RectTracker instance.
       for (const entry of viewsRef.current.values()) {
         entry.tracked = null;
+        entry.range = null;
       }
     };
   }, []);
 
-  const registerView = useCallback((el: HTMLElement, sceneId: SceneId): number => {
-    const viewId = viewIdCounterRef.current++;
-    const deps = depsRef.current;
-    const tracked = deps ? deps.rectTracker.track(el) : null;
-    viewsRef.current.set(viewId, { sceneId, el, tracked });
+  const registerView = useCallback(
+    (el: HTMLElement, sceneId: SceneId, opts?: RegisterViewOptions): number => {
+      const viewId = viewIdCounterRef.current++;
+      const deps = depsRef.current;
+      const rangeEl = opts?.sticky ? (opts.rangeEl ?? el.parentElement) : null;
+      const tracked = deps ? deps.rectTracker.track(el) : null;
+      const range = deps && rangeEl ? deps.rectTracker.track(rangeEl) : null;
+      const post = opts?.post === true;
+      viewsRef.current.set(viewId, { sceneId, el, tracked, rangeEl, range, post });
 
-    if (deps && tracked) {
-      if (hostReadyRef.current) {
-        deps.host.addView(viewId, sceneId, toRectData(tracked));
-      } else {
-        pendingViewIdsRef.current.add(viewId);
+      if (deps && tracked) {
+        if (hostReadyRef.current) {
+          deps.host.addView(viewId, sceneId, initialRect({ tracked, range }), { post });
+        } else {
+          pendingViewIdsRef.current.add(viewId);
+        }
       }
-    }
-    return viewId;
-  }, []);
+      return viewId;
+    },
+    []
+  );
 
   const unregisterView = useCallback((viewId: number) => {
     const entry = viewsRef.current.get(viewId);
     if (!entry) return;
     viewsRef.current.delete(viewId);
     pendingViewIdsRef.current.delete(viewId);
+    setReadyViewIds((current) => {
+      if (!current.has(viewId)) return current;
+      const next = new Set(current);
+      next.delete(viewId);
+      return next;
+    });
 
     const deps = depsRef.current;
     if (deps && entry.tracked) {
       deps.rectTracker.untrack(entry.el);
+      if (entry.rangeEl) deps.rectTracker.untrack(entry.rangeEl);
       if (hostReadyRef.current) {
         deps.host.removeView(viewId);
       }
@@ -292,6 +424,8 @@ export default function EngineProvider({ children }: EngineProviderProps) {
     };
   }, []);
 
+  const isViewReady = useCallback((viewId: number) => readyViewIds.has(viewId), [readyViewIds]);
+
   const contextValue = useMemo<EngineContextValue>(
     () => ({
       status,
@@ -302,14 +436,23 @@ export default function EngineProvider({ children }: EngineProviderProps) {
       registerView,
       unregisterView,
       invoke,
+      isViewReady,
       onScrollProgress,
     }),
-    [status, progress, hostMode, quality, stats, registerView, unregisterView, invoke, onScrollProgress]
+    [status, progress, hostMode, quality, stats, registerView, unregisterView, invoke, isViewReady, onScrollProgress]
   );
 
   return (
     <EngineContext.Provider value={contextValue}>
       <GlCanvas ref={canvasRef} />
+      {/* The non-GL half of the riso treatment. Renders only on the tier
+          where gl/post.ts declines the GPU pass, so the print texture
+          degrades instead of disappearing — see RisoGrainOverlay. */}
+      <RisoGrainOverlay
+        quality={quality}
+        reducedMotion={reducedMotion}
+        route={detectRoute()}
+      />
       {children}
     </EngineContext.Provider>
   );

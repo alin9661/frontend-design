@@ -30,6 +30,15 @@ export type ViewRefCallback = (el: HTMLElement | null) => void;
 export interface UseViewOptions {
   /** Fired with the assigned viewId on attach, and with `null` on detach. */
   onReady?: (viewId: number | null) => void;
+  /** The ref'd element is `position: sticky; top: 0` and its scroll range is
+   * its (taller) parent — see RegisterViewOptions.sticky for why the engine
+   * cannot infer this from a static rect measurement. */
+  sticky?: boolean;
+  /** Route this view through the shared post chain when it is the only thing
+   * drawing and it covers the viewport — see RegisterViewOptions.post. Without
+   * it there is no expressible way to reach gl/post.ts at all, and the whole
+   * bloom/SMAA/riso chain is unreachable dead code. */
+  post?: boolean;
 }
 
 export function useView(sceneId: SceneId, opts?: UseViewOptions): ViewRefCallback {
@@ -59,16 +68,18 @@ export function useView(sceneId: SceneId, opts?: UseViewOptions): ViewRefCallbac
     }
   }, [unregisterView]);
 
+  const sticky = opts?.sticky ?? false;
+  const post = opts?.post ?? false;
   const ref = useCallback<ViewRefCallback>(
     (el) => {
       detach();
       if (el) {
-        const viewId = registerView(el, sceneId);
+        const viewId = registerView(el, sceneId, { sticky, post });
         viewIdRef.current = viewId;
         onReadyRef.current?.(viewId);
       }
     },
-    [detach, registerView, sceneId]
+    [detach, registerView, sceneId, sticky, post]
   );
 
   // Safety net: React always calls a ref callback with `null` before

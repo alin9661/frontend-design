@@ -7,7 +7,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
-import { Gpgpu, type GpgpuRenderer } from "@/lib/engine/gl/gpgpu";
+import {
+  Gpgpu,
+  GpgpuFloatSupportError,
+  type GpgpuRenderer,
+} from "@/lib/engine/gl/gpgpu";
 
 function mockGpgpuRenderer(): GpgpuRenderer & { calls: string[] } {
   const calls: string[] = [];
@@ -32,6 +36,47 @@ describe("Gpgpu", () => {
     expect(gpgpu.read).not.toBe(gpgpu.write);
     expect(gpgpu.read.width).toBe(64);
     expect(gpgpu.write.height).toBe(64);
+  });
+
+  it.each([
+    ["float", THREE.FloatType],
+    ["half-float", THREE.HalfFloatType],
+  ] as const)("allocates both render targets with %s support", (support, expectedType) => {
+    const gpgpu = new Gpgpu({
+      width: 8,
+      height: 8,
+      simulationMaterial: makeSimMaterial(),
+      support,
+    });
+
+    expect(gpgpu.read.texture.type).toBe(expectedType);
+    expect(gpgpu.write.texture.type).toBe(expectedType);
+  });
+
+  it("lets an explicit texture type override a supported capability verdict", () => {
+    const gpgpu = new Gpgpu({
+      width: 8,
+      height: 8,
+      simulationMaterial: makeSimMaterial(),
+      support: "float",
+      type: THREE.HalfFloatType,
+    });
+
+    expect(gpgpu.read.texture.type).toBe(THREE.HalfFloatType);
+    expect(gpgpu.write.texture.type).toBe(THREE.HalfFloatType);
+  });
+
+  it("fails before allocation when floating-point render targets are unsupported", () => {
+    const construct = () =>
+      new Gpgpu({
+        width: 8,
+        height: 8,
+        simulationMaterial: makeSimMaterial(),
+        support: "none",
+      });
+
+    expect(construct).toThrowError(GpgpuFloatSupportError);
+    expect(construct).toThrowError(/detectFloatSupport.*CPU fallback/i);
   });
 
   it("compute() renders into the write target, then swaps read/write", () => {

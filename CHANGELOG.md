@@ -3,6 +3,25 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.3.3.0] - 2026-08-10
+
+### Added
+- An executable completion manifest. Every guarantee this codebase makes is one
+  row with a machine-evaluable check, and the suite polices it in both
+  directions: a shipped guarantee that stops holding fails as a regression, and
+  an unfinished item whose check starts passing fails as an under-report. The
+  point of the second direction is that nobody forgets to claim credit for work
+  they are proud of, but everyone forgets when something lands incidentally.
+- A Blender authoring brief for the optional `origin-assets.glb`: the node names
+  that are the entire contract, the bounding boxes that let the existing
+  choreography carry over, and how to tell a failed load from a bad export.
+
+### Changed
+- The README no longer claims all art is procedural with no external assets, and
+  the engine design doc no longer forbids GLTF outright. Both became false when
+  the optional GLB path landed; they say what is true now, including what is
+  still forbidden (Draco, KTX2, image textures).
+
 ## [0.3.2.0] - 2026-08-10
 
 ### Added

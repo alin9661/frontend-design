@@ -3,6 +3,50 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.3.1.0] - 2026-08-10
+
+The landing page becomes a film. The hero and its parallax scene are gone,
+replaced by a seven-chapter scroll story that follows yerba mate from leaf to
+can, rendered on the WebGL engine with the full SVG version still underneath as
+a fallback.
+
+### Added
+- **A seven-chapter origin film** running 12 viewports on mobile and 15 on
+  desktop. Chapter timing is generated from per-chapter weights in one module
+  rather than hand-entered numbers, so retuning the pacing is a one-line change
+  and the background, ink, intro and rule tracks stay synchronised with the
+  beats instead of drifting.
+- **Pollen** that drifts through the opening chapter, simulated on the GPU where
+  float render targets are available and on the CPU where they are not, so the
+  field exists on every device rather than only the capable ones.
+- **Drag the can to inspect it.** The gesture arbitrates against a 15-viewport
+  vertical scroll: until a drag commits to an axis it takes nothing, and once it
+  commits to vertical it never steals the scroll again for that gesture.
+- **An opt-in ambient soundscape**, synthesised in the browser with no audio
+  files, crossfading between five beds as the film advances. Off by default;
+  the synth graph is only downloaded if you turn it on.
+- **A continuous shelf-to-showcase handoff**, so the film's closing shelf of
+  cans and the flavor showcase below it read as one move rather than two
+  sections that happen to be adjacent.
+- A site header with wayfinding that stays legible against every chapter's
+  background, a chapter scrubber, and a skip control — at fifteen viewports
+  those stop being nice-to-have.
+- The film's hand and machine can be upgraded with modelled geometry by dropping
+  a `public/origin-assets.glb` in place. It is not committed, its absence is
+  silent and costs nothing, and the procedural rig renders either way.
+
+### Changed
+- Every animated component moved to framer-motion's lightweight `m.*` namespace
+  under a strict `LazyMotion` boundary, which cut roughly 19 kB of JavaScript
+  from every route. Anything that reverts to a full `motion.*` element now
+  fails a test rather than throwing in a visitor's browser.
+- Non-flavor colors moved into one palette module shared by the SVG film, the
+  DOM and the GL scene, so a brand change is one edit instead of a hunt.
+
+### Removed
+- The hero, its parallax scene, and the floating decorative items. The film
+  replaces them.
+
 ## [0.3.0.0] - 2026-08-10
 
 First of five stacked releases delivering the origin film. This one is the

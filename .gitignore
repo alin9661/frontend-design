@@ -28,3 +28,6 @@ next-env.d.ts
 
 # local tool artifacts
 .playwright-mcp/
+
+# QA screenshots dropped at repo root by browser automation
+/*.png

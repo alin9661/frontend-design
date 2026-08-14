@@ -228,7 +228,7 @@ describe("@/lib/engine/worker/host — WorkerHost", () => {
 
       expect(worker.posted[0]).toMatchObject({ type: "INIT", route: "/" });
 
-      host.addView(7, "hero-can", { top: 0, left: 0, width: 10, height: 10 }, { post: true });
+      host.addView(7, "origin-film", { top: 0, left: 0, width: 10, height: 10 }, { post: true });
       host.addView(8, "placeholder", { top: 0, left: 0, width: 10, height: 10 });
 
       expect(worker.posted.at(-2)).toMatchObject({ type: "VIEW_ADD", viewId: 7, post: true });

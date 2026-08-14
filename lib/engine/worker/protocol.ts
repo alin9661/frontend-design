@@ -27,7 +27,7 @@
 // scalar (rather than two more float slots) keeps the transferable buffer
 // small while still fitting cleanly into the existing scalar-slot layout.
 
-import type { RectData } from "../types";
+import type { RectData, WorkerToMain } from "../types";
 
 export const SCALAR_SLOT_COUNT = 8;
 export const FLOATS_PER_VIEW = 6;
@@ -49,13 +49,26 @@ export const MainToWorkerType = {
 
 export const WorkerToMainType = {
   READY: "READY",
+  VIEW_READY: "VIEW_READY",
   ASSET_PROGRESS: "ASSET_PROGRESS",
   ASSETS_DONE: "ASSETS_DONE",
   HIT: "HIT",
   STATS: "STATS",
   CONTEXT_LOST: "CONTEXT_LOST",
   CONTEXT_RESTORED: "CONTEXT_RESTORED",
+  INIT_FAILED: "INIT_FAILED",
 } as const;
+
+// This map is the canonical registry of worker->main message types, so it must
+// stay exhaustive against the WorkerToMain union in types.ts. Both directions
+// are asserted: a new union member with no constant fails the first line, a
+// stale constant with no union member fails the second. Compile-time only —
+// `bunx tsc --noEmit` is what enforces it, no runtime cost.
+type Assert<T extends true> = T;
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export type WorkerToMainTypeIsExhaustive = Assert<
+  SameUnion<(typeof WorkerToMainType)[keyof typeof WorkerToMainType], WorkerToMain["type"]>
+>;
 
 export interface FrameStateScalars {
   scrollCurrent: number;

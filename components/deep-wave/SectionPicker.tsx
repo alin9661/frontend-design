@@ -15,7 +15,7 @@
 "use client";
 
 import { useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { m, useReducedMotion } from "framer-motion";
 import { flavors } from "@/lib/flavors";
 import { useView } from "@/lib/engine/react/useView";
 import { useEngine } from "@/lib/engine/react/useEngine";
@@ -116,9 +116,9 @@ export default function SectionPicker() {
               mount/unmount transition), and AnimatePresence's exit-then-enter
               sequencing needs real animation-frame timing to resolve — which
               would make its appearance async/flaky in tests for no visual
-              benefit here. Keying the motion.div still replays the entrance
+              benefit here. Keying the m.div still replays the entrance
               animation on every selection. */}
-          <motion.div
+          <m.div
             key={selected.id}
             initial={reduceMotion ? undefined : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -128,7 +128,7 @@ export default function SectionPicker() {
             <p className="mt-2 max-w-md font-body" style={{ color: inkMuted }}>
               {selected.tagline}
             </p>
-          </motion.div>
+          </m.div>
         </div>
       </div>
     </section>

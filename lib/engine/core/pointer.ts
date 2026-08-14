@@ -60,6 +60,18 @@ export class PointerTracker {
     this._state = { ...this._state, down: true };
   };
 
+  /**
+   * Also the `pointercancel` handler, and that is load-bearing on touch.
+   *
+   * When the UA takes a touch gesture for itself — which is exactly what
+   * `touch-action: pan-y` asks it to do for a vertical pan — it fires
+   * `pointercancel` and NEVER fires `pointerup`. Listening only for
+   * `pointerup` therefore latches `down: true` for the rest of the session
+   * after the visitor's first scroll, and every consumer that reads
+   * `ctx.pointer.down` (the origin film's drag inspector, for one) then sees
+   * a drag that no finger is performing. `pointerleave` cannot rescue it:
+   * that event does not bubble and is not reliably delivered on `window`.
+   */
   private readonly onUp = (): void => {
     this._state = { ...this._state, down: false };
   };
@@ -75,6 +87,7 @@ export class PointerTracker {
     this.el.addEventListener("pointermove", this.onMove);
     this.el.addEventListener("pointerdown", this.onDown);
     this.el.addEventListener("pointerup", this.onUp);
+    this.el.addEventListener("pointercancel", this.onUp);
     this.el.addEventListener("pointerleave", this.onLeave);
 
     this.unsubscribeTick = ticker.add((dt) => this.onTick(dt), TickOrder.INPUT);
@@ -91,6 +104,7 @@ export class PointerTracker {
     this.el.removeEventListener("pointermove", this.onMove);
     this.el.removeEventListener("pointerdown", this.onDown);
     this.el.removeEventListener("pointerup", this.onUp);
+    this.el.removeEventListener("pointercancel", this.onUp);
     this.el.removeEventListener("pointerleave", this.onLeave);
   }
 

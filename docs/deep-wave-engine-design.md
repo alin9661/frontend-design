@@ -29,7 +29,7 @@ SOG files; pure timeline sampler instead of GSAP (worker-safe).
 
 | Package | Usage rules |
 |---|---|
-| `three` (runtime) | Named imports only. `RoomEnvironment` from examples allowed. No GLTF/DRACO/Basis loaders — all content procedural/synthesized. |
+| `three` (runtime) | Named imports only. `RoomEnvironment` from examples allowed. GLTFLoader + meshopt are permitted only for the origin film's hand and machine; DRACO, KTX2/Basis, and image textures remain forbidden. |
 | `postprocessing` (runtime) | pmndrs vanilla lib (NOT @react-three/postprocessing). Import `EffectComposer, RenderPass, EffectPass, BloomEffect, SMAAEffect` only. |
 | `msdf-bmfont-xml` (dev-only) | Build-time MSDF atlas generation. If its msdfgen binary fails on this machine, the fallback is runtime tiny-sdf atlas mode (see §4C). |
 

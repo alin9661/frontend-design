@@ -10,6 +10,18 @@
 // context (no DOM, no runtime three) and from pure unit tests.
 
 import type * as THREE from "three";
+// Type-only, therefore erased: neither of these pulls runtime `three` (or
+// anything else) into this file, so the "usable from worker context" rule
+// above still holds. They are imported rather than re-declared on purpose —
+// `GpgpuRenderer` is gl/gpgpu.ts's own render-to-texture seam and
+// `FloatSupport` is gl/float-support.ts's verdict, and a second structural
+// copy here would be free to drift away from the real ones. (The M0
+// convention is that contracts live in this file; these two predate the
+// ViewContext seam below and moving them would mean editing gl/gpgpu.ts's
+// public surface, so the dependency points the other way for these two
+// names only.)
+import type { GpgpuRenderer } from "./gl/gpgpu";
+import type { FloatSupport } from "./gl/float-support";
 
 // ---------------------------------------------------------------------------
 // core/ticker.ts
@@ -117,6 +129,17 @@ export interface RendererLike {
     reset(): void;
     render: { calls: number };
   };
+  /**
+   * Optional: THREE.WebGLRenderer's live GL context. Additive/optional for
+   * the same reason as `info` — existing `RendererLike` mocks never set it.
+   * Stage uses it (and only it) to run gl/float-support.ts's
+   * `detectFloatSupport()` once, so a SceneModule can learn whether float
+   * render targets are usable WITHOUT reaching for a renderer it isn't given
+   * (see `ViewContext.floatSupport`). A renderer that omits this is treated
+   * as having no float support at all — "none" is the safe verdict, since
+   * guessing "float" is what produces a silently black GPGPU simulation.
+   */
+  getContext?(): WebGLRenderingContext | WebGL2RenderingContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +159,7 @@ export interface AssetManager {
 
 export type SceneId =
   | "hero-can"
+  | "origin-film"
   | "exploded"
   | "particles"
   | "pointer-field"
@@ -166,6 +190,40 @@ export interface ViewContext {
    * hand-built `ViewContext` test fixture stays valid unchanged.
    */
   registerInteractive?(objects: THREE.Object3D[]): void;
+  /**
+   * Additive (post-M0-freeze): the NARROW render-to-texture seam, for scenes
+   * that run a GPGPU ping-pong pass (gl/gpgpu.ts's `Gpgpu.compute()` needs
+   * `setRenderTarget`, which `RendererLike` deliberately does not expose —
+   * see gl/gpgpu.ts's header for why that seam is separate). This is
+   * `GpgpuRenderer`, not the whole `THREE.WebGLRenderer`: a scene may render
+   * into its own targets, and must not be able to resize the canvas, change
+   * the scissor rectangle Stage owns, or dispose the renderer out from under
+   * every other view.
+   *
+   * Optional, and `undefined` whenever the host has no real WebGLRenderer
+   * (every hand-built test fixture, and any `RendererLike` mock without
+   * `setRenderTarget`). A scene MUST treat `undefined` as "no GPU compute
+   * this frame" and hold its pose rather than throwing — Stage still calls
+   * `update()` normally.
+   *
+   * Lifetime: valid only for the duration of the call it was handed to. Do
+   * not retain it across frames; a context loss replaces the renderer and
+   * re-runs `init()`.
+   */
+  renderer?: GpgpuRenderer;
+  /**
+   * Additive (post-M0-freeze): the result of gl/float-support.ts's
+   * `detectFloatSupport()` against the live context, probed once by Stage
+   * and shared by every view (it is a property of the context, not of a
+   * scene). Scenes pass it straight to `Gpgpu`'s `support` option instead of
+   * letting it default — `Gpgpu` defaults to `"float"`, which is the unsafe
+   * guess.
+   *
+   * `undefined` means "nobody probed" (a hand-built ViewContext, or a
+   * renderer with no `getContext`). Treat that exactly like `"none"` and take
+   * the CPU path; never treat it as `"float"`.
+   */
+  floatSupport?: FloatSupport;
 }
 
 export interface SceneModule {
@@ -220,6 +278,8 @@ export interface InitMessage {
   dpr: number;
   quality: QualityTier;
   reducedMotion: boolean;
+  /** See `HostInit.route`. */
+  route?: string;
 }
 
 export interface FrameStateMessage {
@@ -239,6 +299,8 @@ export interface ViewAddMessage {
   viewId: number;
   sceneId: SceneId;
   rect: RectData;
+  /** See `AddViewOptions.post`. Structured-clone-safe (a plain boolean). */
+  post?: boolean;
 }
 
 export interface ViewRemoveMessage {
@@ -274,6 +336,12 @@ export type MainToWorker =
 
 export interface ReadyMessage {
   type: "READY";
+}
+
+/** A specific view's SceneModule.init() has resolved and it can render. */
+export interface ViewReadyMessage {
+  type: "VIEW_READY";
+  viewId: number;
 }
 
 export interface AssetProgressMessage {
@@ -324,6 +392,7 @@ export interface InitFailedMessage {
 
 export type WorkerToMain =
   | ReadyMessage
+  | ViewReadyMessage
   | AssetProgressMessage
   | AssetsDoneMessage
   | HitMessage
@@ -340,13 +409,44 @@ export interface HostInit {
   dpr: number;
   quality: QualityTier;
   reducedMotion: boolean;
+  /**
+   * The page route the canvas is being created for, forwarded to
+   * `StageOptions.route` and from there to gl/post.ts's route gate.
+   *
+   * Additive (post-M0-freeze). `undefined` means "the caller did not say
+   * where it is", which gl/shaders/riso.ts reads as no grain at all — NOT the
+   * same as `""`, which normalises to `"/"` and DOES get grain. A host that
+   * cannot name its route must leave this unset rather than guess.
+   */
+  route?: string;
+}
+
+/**
+ * Per-view registration flags a host forwards to `Stage.addView`.
+ *
+ * Deliberately NOT gl/view.ts's `ViewOptions`: this crosses the worker
+ * boundary as a structured-clone payload, so it may only ever hold plain
+ * data, and it is the main thread's vocabulary rather than the GL layer's.
+ */
+export interface AddViewOptions {
+  /**
+   * This view wants the shared post-processing chain (bloom + SMAA + the riso
+   * grain pass). Honoured only when the view is the sole one drawing and its
+   * rect covers the whole viewport — gl/stage.ts's `resolvePostView()` is the
+   * gate, and it silently declines otherwise, so opting in is a request, not
+   * a guarantee.
+   *
+   * There is no default-on: a composer owns the entire drawing buffer, so a
+   * view that opts in while sharing the canvas with another would erase it.
+   */
+  post?: boolean;
 }
 
 export interface RenderHost {
   readonly mode: "worker" | "main";
   init(canvas: HTMLCanvasElement, opts: HostInit): Promise<void>;
   frame(state: Float32Array): void;
-  addView(viewId: number, sceneId: SceneId, rect: RectData): void;
+  addView(viewId: number, sceneId: SceneId, rect: RectData, opts?: AddViewOptions): void;
   removeView(viewId: number): void;
   invoke(viewId: number, method: string, args: unknown[]): void;
   onMessage(cb: (m: WorkerToMain) => void): () => void;

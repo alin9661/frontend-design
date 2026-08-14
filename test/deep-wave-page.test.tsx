@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
+// Route tests render through the real provider stack (strict LazyMotion), so
+// a stray full `motion.*` element on /deep-wave throws here instead of only
+// in the browser. See test/test-utils/render-in-app.tsx.
+import { renderInApp as render } from "./test-utils/render-in-app";
 import userEvent from "@testing-library/user-event";
 import { flavors } from "@/lib/flavors";
 

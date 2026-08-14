@@ -1,9 +1,30 @@
 @import "tailwindcss";
 
 @theme {
+  /* Canonical TypeScript palette: lib/palette.ts. These Tailwind tokens must
+     match its brandPalette (cream #F9F9EE, forest #1D423C, forestDeep #142E29)
+     and scenePalette (amber #F3B45E, clay #C5673C, ochre #D58A3D,
+     leaf #74A56F, kiln #9A5A2D). */
   --color-cream: #F9F9EE;
   --color-forest: #1D423C;
   --color-forest-deep: #142E29;
+  --color-amber: #F3B45E;
+  --color-clay: #C5673C;
+  --color-ochre: #D58A3D;
+  --color-leaf: #74A56F;
+  --color-kiln: #9A5A2D;
+
+  /* Console palette for the /refer route's fake-internal-tool aesthetic.
+     Deliberately prefixed so it can't be confused with the Mateína
+     cream/forest brand tokens above — the two never appear on the same page.
+     Tailwind v4 only emits utilities that are actually referenced, so tokens
+     used by one route cost the others nothing.
+     Contrast on --color-console-ink: dim 5.0:1, amber 9.1:1, bright 13.7:1. */
+  --color-console-ink: #0A0C10;
+  --color-console-line: #1E2530;
+  --color-console-dim: #7A8494;
+  --color-console-amber: #E8A33D;
+  --color-console-bright: #D6DEE9;
 
   --font-display: var(--font-anton);
   --font-body: var(--font-space-grotesk);

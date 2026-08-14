@@ -46,6 +46,44 @@ export function computeProgress(rect: RectData, scrollY: number, viewportH: numb
   return Math.min(1, Math.max(0, raw));
 }
 
+/**
+ * Sub-pixel slack (CSS px) for `coversViewport`. A sticky stage measured out
+ * of the DOM lands on fractional rects all the time; demanding an exact match
+ * would mean the post chain silently never engages.
+ */
+export const VIEWPORT_COVER_TOLERANCE = 1;
+
+/**
+ * Pure: does this view's document-space rect currently cover the ENTIRE
+ * viewport (and therefore the entire shared canvas, which is viewport-sized)?
+ *
+ * This is the precondition for running a view through gl/post.ts's composer:
+ * a composer renders its (scene, camera) across the whole drawing buffer and
+ * clears the whole drawing buffer, so pointing it at a view that only owns a
+ * scissored sub-rectangle would both stretch that view's content over the
+ * canvas and wipe every other view's pixels. See gl/stage.ts's
+ * `resolvePostView()`.
+ *
+ * Deliberately expressed in CSS/document space rather than device pixels: it
+ * is then independent of DPR clamping, which the scissor math and
+ * `renderer.setSize` resolve differently.
+ */
+export function coversViewport(
+  rect: RectData,
+  scrollY: number,
+  viewportW: number,
+  viewportH: number,
+  tolerance: number = VIEWPORT_COVER_TOLERANCE
+): boolean {
+  const top = rect.top - scrollY;
+  return (
+    rect.left <= tolerance &&
+    rect.left + rect.width >= viewportW - tolerance &&
+    top <= tolerance &&
+    top + rect.height >= viewportH - tolerance
+  );
+}
+
 export interface ScissorRect {
   x: number;
   y: number;
@@ -87,6 +125,22 @@ export class View {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   rect: RectData;
+  /**
+   * Per-frame progress supplied by the main thread (FRAME_STATE slot 5),
+   * overriding this view's own `computeProgress(rect, …)`.
+   *
+   * For an ordinary view the two agree exactly (core/rect-tracker.ts's
+   * `TrackedRect.progress` is the same formula as `computeProgress`), so
+   * this changes nothing. It exists for views whose *scroll range* is not
+   * the same box as their *scissor rect* — a `position: sticky` stage,
+   * where the rect being drawn into is one viewport tall and pinned, while
+   * the scroll range that should drive the film is the tall parent section.
+   * Deriving progress from the pinned rect alone yields a constant 0.5; only
+   * the main thread knows the range, so it sends the answer.
+   *
+   * `null` = no override, fall back to the rect-derived value.
+   */
+  progressOverride: number | null = null;
   /** Set via `ViewContext.registerInteractive()` — see gl/raycast.ts's
    * `Stage.raycastCandidates()` for how this feeds the shared raycast path.
    * Empty until (and unless) the scene ever registers anything. */
@@ -117,7 +171,13 @@ export class View {
   }
 
   progress(scrollY: number, viewportH: number): number {
+    if (this.progressOverride !== null) return this.progressOverride;
     return computeProgress(this.rect, scrollY, viewportH);
+  }
+
+  /** `null` clears the override and restores rect-derived progress. */
+  setProgress(p: number | null): void {
+    this.progressOverride = p === null ? null : Math.min(1, Math.max(0, p));
   }
 
   private applyCamera(): void {

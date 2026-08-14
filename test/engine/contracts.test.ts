@@ -29,6 +29,8 @@ import type {
   WorkerToMain,
 } from "@/lib/engine/types";
 import { TickOrder } from "@/lib/engine/types";
+import { Gpgpu, type GpgpuRenderer } from "@/lib/engine/gl/gpgpu";
+import { floatSupportToTextureType, type FloatSupport } from "@/lib/engine/gl/float-support";
 import {
   FLOATS_PER_VIEW,
   MainToWorkerType,
@@ -75,9 +77,10 @@ describe("engine contracts — shared types compile and are constructible", () =
     expect(splat.colors.length).toBe(4);
   });
 
-  it("SceneId union covers exactly the 7 documented scene ids", () => {
+  it("SceneId union covers exactly the 8 documented scene ids", () => {
     const ids: SceneId[] = [
       "hero-can",
+      "origin-film",
       "exploded",
       "particles",
       "pointer-field",
@@ -85,8 +88,8 @@ describe("engine contracts — shared types compile and are constructible", () =
       "picker",
       "placeholder",
     ];
-    expect(ids).toHaveLength(7);
-    expect(new Set(ids).size).toBe(7);
+    expect(ids).toHaveLength(8);
+    expect(new Set(ids).size).toBe(8);
   });
 
   it("RendererLike / HostInit / RenderHost / TrackKeyframe / Ease are structurally satisfiable", () => {
@@ -172,6 +175,67 @@ describe("engine contracts — shared types compile and are constructible", () =
     };
     expect(ctx.scene).toBeInstanceOf(THREE.Scene);
     expect(ctx.quality).toBe("medium");
+    // The additive GPGPU seams are optional, so this pre-existing fixture —
+    // and every other hand-built ViewContext in the repo — still satisfies
+    // the type without mentioning them.
+    expect(ctx.renderer).toBeUndefined();
+    expect(ctx.floatSupport).toBeUndefined();
+  });
+
+  it("ViewContext.renderer is exactly the seam Gpgpu.compute() consumes, not a wider renderer", () => {
+    // The point of the narrow seam: a scene can drive a ping-pong compute
+    // pass without being handed setSize/dispose over the shared canvas. If
+    // types.ts and gl/gpgpu.ts ever drift apart, this stops compiling.
+    const recorded: (THREE.WebGLRenderTarget | null)[] = [];
+    const seam: GpgpuRenderer = {
+      setRenderTarget: (target) => recorded.push(target),
+      render: () => {},
+    };
+    const ctx: ViewContext = {
+      scene: new THREE.Scene(),
+      camera: new THREE.PerspectiveCamera(45, 1, 0.1, 1000),
+      rect: { top: 0, left: 0, width: 300, height: 300 },
+      scroll: { target: 0, current: 0, velocity: 0, progress: 0, limit: 1000 },
+      pointer: { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false },
+      assets: {
+        add: () => {},
+        get: () => {
+          throw new Error("not needed in this test");
+        },
+        start: async () => {},
+        onProgress: () => () => {},
+      },
+      size: { width: 300, height: 300, dpr: 1 },
+      quality: "high",
+      reducedMotion: false,
+      renderer: seam,
+      floatSupport: "float",
+    };
+
+    const gpgpu = new Gpgpu({
+      width: 4,
+      height: 4,
+      simulationMaterial: new THREE.ShaderMaterial({ uniforms: { uTexture: { value: null } } }),
+      support: ctx.floatSupport,
+    });
+    const write = gpgpu.write;
+    gpgpu.compute(ctx.renderer!);
+
+    // compute() targets the write buffer then restores the default target,
+    // and the ping-pong flips — i.e. the seam Stage hands over is sufficient.
+    expect(recorded).toEqual([write, null]);
+    expect(gpgpu.read).toBe(write);
+    gpgpu.dispose();
+  });
+
+  it("FloatSupport verdicts are the only values ViewContext.floatSupport may carry", () => {
+    const verdicts: FloatSupport[] = ["float", "half-float", "none"];
+    const carried = verdicts.map((floatSupport) => floatSupport satisfies ViewContext["floatSupport"]);
+    expect(carried).toEqual(verdicts);
+    // "none" is what a scene must fall back to when the field is absent —
+    // guessing "float" is what silently blackens a GPGPU simulation.
+    expect(floatSupportToTextureType("none")).toBeNull();
+    expect(floatSupportToTextureType("float")).toBe(THREE.FloatType);
   });
 });
 
@@ -310,6 +374,7 @@ describe("lib/scenes/placeholder — SceneModule shape", () => {
     const ids = [
       "placeholder",
       "hero-can",
+      "origin-film",
       "exploded",
       "particles",
       "pointer-field",

@@ -3,16 +3,24 @@ import { render, screen } from "@testing-library/react";
 import SocialProof from "@/components/SocialProof";
 
 describe("components/SocialProof", () => {
-  it("exposes the star rating as an accessible role=img with a label", () => {
+  it("keeps a single accessible label for the decorative marquee", () => {
     render(<SocialProof />);
     expect(
-      screen.getByRole("img", { name: "Five out of five stars" })
+      screen.getByText("Join the #MateinaFamilia")
     ).toBeInTheDocument();
   });
 
-  it("shows the Huberman attribution text", () => {
-    render(<SocialProof />);
-    expect(screen.getByText("Dr. Andrew Huberman")).toBeInTheDocument();
-    expect(screen.getByText(/Host of Huberman Lab/)).toBeInTheDocument();
+  it("identifies the page as an unaffiliated fan-made concept", () => {
+    const { container } = render(<SocialProof />);
+
+    expect(
+      screen.getByRole("heading", {
+        name: "An unofficial fan advertisement for Mateína.",
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/It is fan-made, not a brand campaign\./)
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toContain("Huberman");
   });
 });

@@ -33,10 +33,14 @@ function makeRendererMock(): RendererLike {
 
 const rendererMock = makeRendererMock();
 
-vi.mock("@/lib/engine/gl/renderer", () => ({
-  createRenderer: vi.fn(() => rendererMock),
-  setSize: vi.fn(),
-}));
+vi.mock("@/lib/engine/gl/renderer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/engine/gl/renderer")>();
+  return {
+    ...actual,
+    createRenderer: vi.fn(() => rendererMock),
+    setSize: vi.fn(),
+  };
+});
 
 // scene-registry.ts's "placeholder" loader does
 // `import("@/lib/scenes/placeholder/scene").then((m) => m.default())` — mock
@@ -63,6 +67,40 @@ vi.mock("@/lib/scenes/placeholder/scene", () => ({
     onPointer: sceneOnPointer,
   }),
 }));
+
+// Records what the worker actually hands gl/Stage. Both fields below can
+// ONLY reach the worker over a message — it has no `location` for the page
+// that spawned it and no view registry of its own — so a plumbing gap here is
+// invisible to every Stage/Post unit test, all of which hand-pass their own
+// route and `post: true`.
+const { stageOptions, stageAddViews } = vi.hoisted(() => ({
+  stageOptions: [] as Array<Record<string, unknown>>,
+  stageAddViews: [] as Array<{ viewId: number; post: boolean | undefined }>,
+}));
+
+vi.mock("@/lib/engine/gl/stage", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/engine/gl/stage")>();
+  class RecordingStage extends actual.Stage {
+    constructor(
+      renderer: ConstructorParameters<typeof actual.Stage>[0],
+      frame: ConstructorParameters<typeof actual.Stage>[1],
+      opts: ConstructorParameters<typeof actual.Stage>[2] = {},
+    ) {
+      stageOptions.push(opts as unknown as Record<string, unknown>);
+      super(renderer, frame, opts);
+    }
+    override addView(
+      viewId: number,
+      rect: Parameters<InstanceType<typeof actual.Stage>["addView"]>[1],
+      module: Parameters<InstanceType<typeof actual.Stage>["addView"]>[2],
+      opts?: Parameters<InstanceType<typeof actual.Stage>["addView"]>[3],
+    ): void {
+      stageAddViews.push({ viewId, post: opts?.post });
+      super.addView(viewId, rect, module, opts);
+    }
+  }
+  return { ...actual, Stage: RecordingStage };
+});
 
 // Imported after the mocks are registered (vi.mock is hoisted by Vitest, but
 // this documents intent). Importing this module has the side effect of
@@ -177,6 +215,62 @@ describe("render.worker.ts — SCENE_INVOKE routing", () => {
     expect(sceneInvoke).toHaveBeenCalledTimes(1);
 
     onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+});
+
+describe("render.worker.ts — VIEW_READY signaling", () => {
+  it("posts VIEW_READY after a successfully added view finishes scene init", async () => {
+    const postMessageSpy = vi.fn();
+    (globalThis as unknown as { postMessage: typeof postMessageSpy }).postMessage = postMessageSpy;
+    const onmessage = (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+
+    onmessage({
+      data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+    } as MessageEvent);
+    onmessage({
+      data: {
+        type: "VIEW_ADD",
+        viewId: 73,
+        sceneId: "placeholder",
+        rect: { top: 0, left: 0, width: 300, height: 300 },
+      },
+    } as MessageEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(postMessageSpy).toHaveBeenCalledWith({ type: "VIEW_READY", viewId: 73 });
+    onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+
+  it("stays silent when the view's scene init rejects", async () => {
+    // The whole point of VIEW_READY is that the main thread may drop its 2D
+    // fallback art on receipt. A scene whose init() threw will never draw, so
+    // the message must not go out — the page keeps the 2D film instead of
+    // fading to an empty background.
+    const postMessageSpy = vi.fn();
+    (globalThis as unknown as { postMessage: typeof postMessageSpy }).postMessage = postMessageSpy;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    sceneInit.mockRejectedValueOnce(new Error("origin-film shader compile failed"));
+    const onmessage = (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+
+    onmessage({
+      data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+    } as MessageEvent);
+    onmessage({
+      data: {
+        type: "VIEW_ADD",
+        viewId: 74,
+        sceneId: "placeholder",
+        rect: { top: 0, left: 0, width: 300, height: 300 },
+      },
+    } as MessageEvent);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(consoleError).toHaveBeenCalled();
+    expect(postMessageSpy).not.toHaveBeenCalledWith({ type: "VIEW_READY", viewId: 74 });
+    onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+    consoleError.mockRestore();
   });
 });
 
@@ -446,5 +540,74 @@ describe("render.worker.ts — RESIZE retains scroll state across ticks (design 
     expect(rendererMock.render).toHaveBeenCalledTimes(2); // still in view — scroll was retained
 
     onmessage({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+});
+
+describe("render.worker.ts — post-processing plumbing", () => {
+  const WORKER_RECT: RectData = { top: 0, left: 0, width: 300, height: 300 };
+  const onmessage = () =>
+    (globalThis as unknown as { onmessage: (ev: MessageEvent) => void }).onmessage;
+
+  beforeEach(() => {
+    (globalThis as unknown as { postMessage: typeof vi.fn }).postMessage = vi.fn();
+    stageOptions.length = 0;
+    stageAddViews.length = 0;
+  });
+
+  it("hands INIT's route to Stage, without which Post builds no riso grain", () => {
+    onmessage()({
+      data: {
+        type: "INIT",
+        canvas: fakeOffscreenCanvas(),
+        dpr: 1,
+        quality: "high",
+        reducedMotion: false,
+        route: "/",
+      },
+    } as MessageEvent);
+
+    expect(stageOptions).toHaveLength(1);
+    expect(stageOptions[0]!.route).toBe("/");
+
+    onmessage()({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+
+  it("leaves the route undefined when INIT did not carry one (never guesses \"/\")", () => {
+    onmessage()({
+      data: { type: "INIT", canvas: fakeOffscreenCanvas(), dpr: 1, quality: "high", reducedMotion: false },
+    } as MessageEvent);
+
+    expect(stageOptions[0]!.route).toBeUndefined();
+
+    onmessage()({ data: { type: "DISPOSE" } } as MessageEvent);
+  });
+
+  it("forwards VIEW_ADD's post flag to Stage.addView, defaulting it off", async () => {
+    onmessage()({
+      data: {
+        type: "INIT",
+        canvas: fakeOffscreenCanvas(),
+        dpr: 1,
+        quality: "high",
+        reducedMotion: false,
+        route: "/",
+      },
+    } as MessageEvent);
+
+    onmessage()({
+      data: { type: "VIEW_ADD", viewId: 91, sceneId: "placeholder", rect: WORKER_RECT, post: true },
+    } as MessageEvent);
+    onmessage()({
+      data: { type: "VIEW_ADD", viewId: 92, sceneId: "placeholder", rect: WORKER_RECT },
+    } as MessageEvent);
+
+    await vi.waitFor(() => expect(stageAddViews).toHaveLength(2));
+    // `Stage.resolvePostView()` returns null for every view whose `post` is
+    // false, so without this hop the whole composer — bloom, SMAA and the
+    // riso grain pass — is unreachable on the worker path too.
+    expect(stageAddViews.find((call) => call.viewId === 91)!.post).toBe(true);
+    expect(stageAddViews.find((call) => call.viewId === 92)!.post).toBe(false);
+
+    onmessage()({ data: { type: "DISPOSE" } } as MessageEvent);
   });
 });

@@ -27,28 +27,49 @@ repo — it defaults to watch mode, which hangs in CI and agent sessions.
   plain assertions on the exported data (counts, uniqueness, color format).
 - **`test/can.test.tsx`** — pure SVG component test for `components/svg/Can.tsx`.
   Verifies accessibility props (`role="img"`, `aria-label`) and visible label text.
-- **`test/floating-item.test.tsx`** — `components/FloatingItem.tsx`, a framer-motion
-  wrapper. Verifies children render and the wrapper's accessibility/positioning
-  attributes, independent of animation timing.
+- **`test/origin-story.test.tsx`** — `components/OriginStory.tsx`. Verifies the
+  full plant-to-drink narrative, CTA targets, finished-can label, and both the
+  sticky animated and stacked reduced-motion layouts.
+- **`test/scenes/origin-film.test.ts`** — `lib/scenes/origin-film/`, the origin
+  film as a `SceneModule` on the shared engine (it used to be a bespoke
+  `<canvas>` with its own renderer). Covers the pure rig builders, per-quality
+  leaf/shelf-can counts, plant-to-can pose staging off scroll progress,
+  re-runnable `init()` for context-loss restore, camera restore on `dispose()`,
+  and the reduced-motion split — all without a GPU in Vitest.
+- **`test/origin-timeline.test.ts`** — `lib/visuals/origin-timeline.ts`, the
+  chapter clock both the DOM film and the GL film read from, including
+  out-of-range progress clamping.
 - **`test/flavor-showcase.test.tsx`** — `components/FlavorShowcase.tsx`, an
   interactive component with state. Verifies all picker buttons render, exactly one
   is pressed at a time, and clicking updates both the pressed state and the
   `aria-live` announcement.
 - **`test/social-proof.test.tsx`** — `components/SocialProof.tsx`. Verifies the
   accessible star rating and the testimonial attribution text.
-- **`test/hero.test.tsx`** — `components/Hero.tsx`. Verifies the two-line
-  headline, CTA anchor targets, and both decor cans' accessible names.
 - **`test/benefits.test.tsx`** — `components/Benefits.tsx`. Verifies the three
   benefit cards render and decorative leaves are `aria-hidden`.
 - **`test/footer.test.tsx`** — `components/Footer.tsx`. Verifies the shop link's
   `href`/`target`/`rel` safety attributes, disclaimer, and hidden watermark.
 - **`test/page.test.tsx`** — `app/page.tsx` integration. Renders the full page
   and asserts every in-page anchor (`#flavors`, `#benefits`) targets a real id.
-- **`test/parallax-scene.test.tsx`** — `components/ParallaxScene.tsx`. Verifies
-  the `useParallax` out-of-provider fallback, pointer-listener lifecycle, and
-  reduced-motion behavior.
 - **`test/svg.test.tsx`** — `components/svg/{Leaf,Citrus,Berry}.tsx` render
   smoke tests with color-prop application.
+
+### Referral Ontology tests (`/refer`)
+
+- **`test/referral.test.ts`** — data-layer tests for `lib/referral.ts`. Covers
+  both branches of `buildReferralBlurb`'s optional résumé line, and pins the
+  template to pronoun-neutral wording.
+- **`test/refer-page.test.tsx`** — `app/refer/page.tsx` integration. Walks the
+  five-step machine end to end, asserts the entity-resolution acknowledgement
+  gate, the Back control, the graph's accessible description, and the parody
+  disclaimer.
+- **`test/refer-clearance-step.test.tsx`** — `components/refer/ClearanceStep.tsx`
+  and, through it, the shared `useTimedLog` hook. Covers **both** reduced-motion
+  branches: instant full log vs. one line per tick under fake timers.
+- **`test/refer-submit-step.test.tsx`** — `components/refer/SubmitReferralStep.tsx`.
+  Covers the clipboard success path and both failure paths (no clipboard API,
+  rejected write), since a silently no-op button would defeat the page's only
+  delivery mechanism.
 
 ### Deep Wave engine tests (42 files)
 

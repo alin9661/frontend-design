@@ -37,6 +37,38 @@ export interface EngineStats {
   sortMs: number;
 }
 
+export interface RegisterViewOptions {
+  /**
+   * The registered element is `position: sticky; top: 0` inside a taller
+   * scroll range (its parent, unless `rangeEl` says otherwise).
+   *
+   * RectTracker measures a STATIC document-space rect, only on track/resize —
+   * never on scroll. For a sticky element that measurement is its *unstuck*
+   * position, so without this flag the view is culled the moment the page
+   * scrolls one viewport past the section top, and its progress reads 0.5 at
+   * the section's start instead of 0. With it, EngineProvider recomputes the
+   * pinned rect and the range-relative progress every frame — from the two
+   * static rects plus scrollY, so still with zero per-frame layout reads.
+   *
+   * Progress matches framer-motion's `useScroll({ offset: ["start start",
+   * "end end"] })` over the same range element, so a DOM film and a GL film
+   * driven off the same section stay in lockstep.
+   */
+  sticky?: boolean;
+  /** Scroll range for `sticky`. Defaults to the registered element's parent. */
+  rangeEl?: HTMLElement | null;
+  /**
+   * Ask for the shared post-processing chain (bloom + SMAA + riso grain) on
+   * this view. Forwarded to `RenderHost.addView` and on to `Stage.addView`.
+   *
+   * A request, not a guarantee: a composer owns the whole drawing buffer, so
+   * gl/stage.ts only honours it on a frame where this is the ONLY view drawing
+   * and its rect covers the viewport. Every other arrangement silently takes
+   * the ordinary scissored path.
+   */
+  post?: boolean;
+}
+
 export interface EngineContextValue {
   status: EngineStatus;
   /** 0-100, from WorkerToMain's ASSET_PROGRESS. */
@@ -51,9 +83,12 @@ export interface EngineContextValue {
   /** Starts tracking `el` as scene `sceneId`'s view. Returns a viewId to
    * pass to `unregisterView`/`invoke`. Safe to call before the engine has
    * finished booting (queued and flushed once the RenderHost is ready). */
-  registerView: (el: HTMLElement, sceneId: SceneId) => number;
+  registerView: (el: HTMLElement, sceneId: SceneId, opts?: RegisterViewOptions) => number;
   unregisterView: (viewId: number) => void;
   invoke: (viewId: number, method: string, args: unknown[]) => void;
+  /** Whether this view's SceneModule.init() has completed. Optional so
+   * narrow test/legacy context doubles fail safe by keeping fallback art. */
+  isViewReady?: (viewId: number) => boolean;
   /** Callback subscription to per-tick scroll progress (0..1). Returns an
    * unsubscribe function. No React state/re-render involved. */
   onScrollProgress: (cb: (progress: number) => void) => () => void;

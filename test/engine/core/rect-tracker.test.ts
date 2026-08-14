@@ -39,6 +39,25 @@ describe("RectTracker.track", () => {
     expect(first).toBe(second);
   });
 
+  it("keeps a shared element live until every tracker reference is released", () => {
+    let top = 0;
+    const el = {} as Element;
+    const tracker = new RectTracker({ measure: () => fakeRect(top, 0, 100, 100) });
+    const first = tracker.track(el);
+    const second = tracker.track(el);
+
+    tracker.untrack(el);
+    top = 250;
+    tracker.refresh(0);
+    expect(first.top).toBe(250);
+    expect(second).toBe(first);
+
+    tracker.untrack(el);
+    top = 500;
+    tracker.refresh(0);
+    expect(first.top).toBe(250);
+  });
+
   it("defaults measure to el.getBoundingClientRect when none is injected", () => {
     const el = { getBoundingClientRect: () => fakeRect(10, 10, 50, 50) } as unknown as Element;
     const tracker = new RectTracker();

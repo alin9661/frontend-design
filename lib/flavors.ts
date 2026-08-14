@@ -64,17 +64,10 @@ export const flavors: Flavor[] = [
   },
 ];
 
-// NOTE: keep these in sync with the `--color-*` tokens in app/globals.css's
-// `@theme` block — that's what powers the `bg-forest`, `text-cream`, etc.
-// Tailwind utility classes. If you change a value here, change it there too.
-export const brand: { cream: string; forest: string; forestDeep: string } = {
-  cream: "#F9F9EE",
-  forest: "#1D423C",
-  forestDeep: "#142E29",
-};
+export { brandPalette as brand } from "./palette";
 
 // Decorative art colors shared by sections that scatter leaves/citrus/berries
-// as background flourish (Hero's floating field, Benefits' idle leaves).
+// as background flourish (the origin story and Benefits' idle leaves).
 // `berry` intentionally uses the current raspberry accent family (#B5301F
 // deepened for contrast) rather than the stale #D94F3D the decor art used to
 // hardcode.

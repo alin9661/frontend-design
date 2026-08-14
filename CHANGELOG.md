@@ -3,6 +3,115 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.3.3.0] - 2026-08-10
+
+### Added
+- An executable completion manifest. Every guarantee this codebase makes is one
+  row with a machine-evaluable check, and the suite polices it in both
+  directions: a shipped guarantee that stops holding fails as a regression, and
+  an unfinished item whose check starts passing fails as an under-report. The
+  point of the second direction is that nobody forgets to claim credit for work
+  they are proud of, but everyone forgets when something lands incidentally.
+- A Blender authoring brief for the optional `origin-assets.glb`: the node names
+  that are the entire contract, the bounding boxes that let the existing
+  choreography carry over, and how to tell a failed load from a bad export.
+
+### Changed
+- The README no longer claims all art is procedural with no external assets, and
+  the engine design doc no longer forbids GLTF outright. Both became false when
+  the optional GLB path landed; they say what is true now, including what is
+  still forbidden (Draco, KTX2, image textures).
+
+## [0.3.2.0] - 2026-08-10
+
+### Added
+- `/refer`: a referral flow as its own route and its own idea, independent of
+  the landing page. It shares only the motion tokens, so it can be reshaped or
+  removed without touching the film.
+
+## [0.3.1.0] - 2026-08-10
+
+The landing page becomes a film. The hero and its parallax scene are gone,
+replaced by a seven-chapter scroll story that follows yerba mate from leaf to
+can, rendered on the WebGL engine with the full SVG version still underneath as
+a fallback.
+
+### Added
+- **A seven-chapter origin film** running 12 viewports on mobile and 15 on
+  desktop. Chapter timing is generated from per-chapter weights in one module
+  rather than hand-entered numbers, so retuning the pacing is a one-line change
+  and the background, ink, intro and rule tracks stay synchronised with the
+  beats instead of drifting.
+- **Pollen** that drifts through the opening chapter, simulated on the GPU where
+  float render targets are available and on the CPU where they are not, so the
+  field exists on every device rather than only the capable ones.
+- **Drag the can to inspect it.** The gesture arbitrates against a 15-viewport
+  vertical scroll: until a drag commits to an axis it takes nothing, and once it
+  commits to vertical it never steals the scroll again for that gesture.
+- **An opt-in ambient soundscape**, synthesised in the browser with no audio
+  files, crossfading between five beds as the film advances. Off by default;
+  the synth graph is only downloaded if you turn it on.
+- **A continuous shelf-to-showcase handoff**, so the film's closing shelf of
+  cans and the flavor showcase below it read as one move rather than two
+  sections that happen to be adjacent.
+- A site header with wayfinding that stays legible against every chapter's
+  background, a chapter scrubber, and a skip control — at fifteen viewports
+  those stop being nice-to-have.
+- The film's hand and machine can be upgraded with modelled geometry by dropping
+  a `public/origin-assets.glb` in place. It is not committed, its absence is
+  silent and costs nothing, and the procedural rig renders either way.
+
+### Changed
+- Every animated component moved to framer-motion's lightweight `m.*` namespace
+  under a strict `LazyMotion` boundary, which cut roughly 19 kB of JavaScript
+  from every route. Anything that reverts to a full `motion.*` element now
+  fails a test rather than throwing in a visitor's browser.
+- Non-flavor colors moved into one palette module shared by the SVG film, the
+  DOM and the GL scene, so a brand change is one edit instead of a hunt.
+
+### Removed
+- The hero, its parallax scene, and the floating decorative items. The film
+  replaces them.
+
+## [0.3.0.0] - 2026-08-10
+
+First of five stacked releases delivering the origin film. This one is the
+engine underneath it, and it is mostly the story of things that were quietly
+not working.
+
+### Fixed
+- **The WebGL engine had never rendered a frame in development.** React's
+  StrictMode remounts every effect, and `transferControlToOffscreen()` throws
+  permanently on a canvas that has already been handed to a worker — so the
+  second mount failed, the engine fell back, and the 2D art that covers for it
+  was good enough to hide the failure. Every effect setup now mints a fresh
+  canvas element. No test caught this because the suite mocked the one call
+  that fails.
+- **The bundle gate was under-measuring route `/` by about 15 kB.** It read the
+  page's own manifest entry and missed the chunks the root layout pulls in, so
+  every "we have headroom" decision was made against a number lower than what
+  browsers actually download. It now unions both, verified against the script
+  tags in the emitted HTML. The gate also reports a breach instead of crashing
+  on an unresolvable manifest key.
+- GPGPU render targets no longer hardcode 32-bit float. A capability probe picks
+  float, then half-float, then reports that neither is available so the caller
+  can take a CPU path. It reads the *renderability* extensions, not the
+  sampling-only `OES_texture_float`, which a context can advertise while still
+  failing framebuffer completeness — the exact false positive that renders a
+  simulation silently black. The particle scene took that unsafe default and
+  now probes.
+- Pointer tracking handles `pointercancel`, so a touch that turns into a scroll
+  no longer leaves the pointer latched down.
+
+### Added
+- A per-view `VIEW_READY` signal on both hosts, so a component can wait for
+  *its own* view to be live rather than for the engine object to exist.
+- A risograph grain post-effect, and the post-processing chain that renders it.
+  `Post` had been dead code since it was written: nothing in the repo ever
+  constructed one.
+- Quality-tier detection split into a module with no three.js dependency, which
+  is what lets the landing page decide how much to load before loading it.
+
 ## [0.2.1.0] - 2026-08-04
 
 ### Changed

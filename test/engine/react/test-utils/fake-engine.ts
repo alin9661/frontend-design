@@ -63,7 +63,9 @@ export function createFakeEngineDeps(opts: FakeHostOptions = {}) {
   const pointerState: PointerState = { x: 0, y: 0, vx: 0, vy: 0, down: false, inside: false };
 
   const ticker = {
-    add: vi.fn(() => vi.fn()),
+    // Params are declared (rather than `vi.fn(() => …)`) so tests can pull the
+    // registered callback back out of `.mock.calls` and drive a frame by hand.
+    add: vi.fn((_cb: (dt: number, elapsed: number) => void, _order: number) => vi.fn()),
     start: vi.fn(),
     stop: vi.fn(() => {
       counts.tickerStop += 1;
@@ -85,7 +87,10 @@ export function createFakeEngineDeps(opts: FakeHostOptions = {}) {
   };
 
   const rectTracker = {
-    track: vi.fn(() => makeTrackedRect()),
+    // `el` is declared so a suite can swap in a per-element implementation
+    // (see EngineProvider.test.tsx's sticky cases, which lay out a fake
+    // document via data-rect-* attributes).
+    track: vi.fn((_el: Element) => makeTrackedRect()),
     untrack: vi.fn(),
     refresh: vi.fn(),
   };
@@ -99,7 +104,10 @@ export function createFakeEngineDeps(opts: FakeHostOptions = {}) {
 
   const host = {
     mode: "main" as const,
-    init: vi.fn(() =>
+    // Signature mirrors EngineHost.init(canvas, opts) so tests can assert on the
+    // canvas node they were handed; a zero-arg vi.fn() would type-error any
+    // mockImplementation that inspects it.
+    init: vi.fn((_canvas: HTMLCanvasElement, _init?: unknown) =>
       opts.initResolves === false ? Promise.reject(new Error("no webgl")) : Promise.resolve()
     ),
     frame: vi.fn(),

@@ -15,6 +15,7 @@ import {
   gatesBeatArtOnViewReady,
   glbPipelineDegradesToProcedural,
   gpgpuProbesFloatSupport,
+  homeBundleBudgetIsEnforced,
   importsModule,
   moduleStem,
   hasNoBootScrollLock,
@@ -154,6 +155,35 @@ describe("lib/project-criteria evaluation helpers", () => {
 });
 
 describe("lib/project-criteria source predicates", () => {
+  it("recognizes the home bundle gate only when CI runs it after a build", () => {
+    const bundleScript = `
+      const HOME_BUDGET = 165_000;
+      const ROUTE_BUDGETS = [{ route: "/", manifestKey: "/page", budgetBytes: HOME_BUDGET }];
+    `;
+    const workflow = `
+      - name: Build
+        run: bun run build
+      - name: Check bundle-size budgets
+        run: bun scripts/check-bundle.ts
+    `;
+
+    expect(homeBundleBudgetIsEnforced({ bundleScript, workflow })).toBe(true);
+    expect(homeBundleBudgetIsEnforced({ bundleScript: null, workflow })).toBe(false);
+    expect(homeBundleBudgetIsEnforced({ bundleScript, workflow: null })).toBe(false);
+    expect(
+      homeBundleBudgetIsEnforced({
+        bundleScript: bundleScript.replace("165_000", "200_000"),
+        workflow,
+      })
+    ).toBe(false);
+    expect(
+      homeBundleBudgetIsEnforced({
+        bundleScript,
+        workflow: workflow.split("\n").reverse().join("\n"),
+      })
+    ).toBe(false);
+  });
+
   it("sectionRootAttributes reads every root tag, including one opened by an arrow handler", () => {
     const source = `
       <motion.section onPointerEnter={(e) => setHover(true)} className="relative">

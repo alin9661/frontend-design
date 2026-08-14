@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.3.2.0] - 2026-08-10
+
+### Added
+- `/refer`: a referral flow as its own route and its own idea, independent of
+  the landing page. It shares only the motion tokens, so it can be reshaped or
+  removed without touching the film.
+
 ## [0.3.1.0] - 2026-08-10
 
 The landing page becomes a film. The hero and its parallax scene are gone,

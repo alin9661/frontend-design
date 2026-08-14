@@ -12,7 +12,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, m, useReducedMotion } from "framer-motion";
 import { useEngine } from "@/lib/engine/react/useEngine";
 import { PROGRESS_TRANSITION_CSS, SWAP } from "@/lib/motion";
 
@@ -34,7 +34,7 @@ export default function LoadingScreen() {
   return (
     <AnimatePresence>
       {visible ? (
-        <motion.div
+        <m.div
           role="status"
           aria-live="polite"
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-forest-deep text-cream"
@@ -73,7 +73,7 @@ export default function LoadingScreen() {
             />
           </div>
           <p className="font-body text-sm text-cream/60">{Math.round(clamped)}%</p>
-        </motion.div>
+        </m.div>
       ) : null}
     </AnimatePresence>
   );

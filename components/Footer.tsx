@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { CTA_SPRING, REVEAL, REVEAL_SLOW } from "@/lib/motion";
 
 // Single parent + variants pattern (matches Hero's container/item split):
@@ -26,30 +26,31 @@ const itemSmall = {
 
 export default function Footer() {
   return (
-    <footer className="relative bg-forest-deep text-cream pt-32 overflow-hidden">
-      <motion.div
+    <footer className="relative text-cream pt-32 overflow-hidden">
+      <div aria-hidden="true" className="absolute inset-0 -z-10 bg-forest-deep" />
+      <m.div
         initial="hidden"
         whileInView="show"
         viewport={{ once: true, amount: 0.25 }}
         variants={container}
         className="relative z-10 flex flex-col items-center text-center px-6"
       >
-        <motion.h2
+        <m.h2
           variants={item}
           className="font-display uppercase text-[clamp(3rem,10vw,8rem)] leading-[0.9]"
         >
           FEEL THE LIFT
-        </motion.h2>
+        </m.h2>
 
-        <motion.p
+        <m.p
           variants={item}
           className="mt-6 font-body text-lg md:text-xl text-cream/80"
         >
           Zero sugar. Organic. Fair trade forever.
-        </motion.p>
+        </m.p>
 
-        <motion.div variants={item} className="mt-10">
-          <motion.a
+        <m.div variants={item} className="mt-10">
+          <m.a
             href="https://drinkmateina.com"
             target="_blank"
             rel="noopener noreferrer"
@@ -73,19 +74,19 @@ export default function Footer() {
             className="inline-block bg-cream text-forest-deep font-display uppercase tracking-wide text-xl md:text-2xl px-10 py-5 rounded-full shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-cream focus-visible:ring-offset-forest-deep"
           >
             SHOP MATEÍNA
-          </motion.a>
-        </motion.div>
+          </m.a>
+        </m.div>
 
-        <motion.p
+        <m.p
           variants={itemSmall}
           className="mt-16 text-cream/50 text-xs font-body"
         >
           © 2026 Mateína concept — unofficial fan advertisement. All
           trademarks belong to Mateina US Inc.
-        </motion.p>
-      </motion.div>
+        </m.p>
+      </m.div>
 
-      <motion.div
+      <m.div
         aria-hidden="true"
         initial={{ y: 60, opacity: 0 }}
         whileInView={{ y: 0, opacity: 1 }}
@@ -98,7 +99,7 @@ export default function Footer() {
         className="select-none pointer-events-none text-center font-display uppercase text-[clamp(6rem,22vw,20rem)] leading-none text-cream/10 whitespace-nowrap mt-24 -mb-[0.25em]"
       >
         MATEÍNA
-      </motion.div>
+      </m.div>
     </footer>
   );
 }

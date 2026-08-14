@@ -3,6 +3,45 @@
 All notable changes to this project are documented in this file.
 Versions follow the 4-digit `MAJOR.MINOR.PATCH.MICRO` format.
 
+## [0.3.0.0] - 2026-08-10
+
+First of five stacked releases delivering the origin film. This one is the
+engine underneath it, and it is mostly the story of things that were quietly
+not working.
+
+### Fixed
+- **The WebGL engine had never rendered a frame in development.** React's
+  StrictMode remounts every effect, and `transferControlToOffscreen()` throws
+  permanently on a canvas that has already been handed to a worker — so the
+  second mount failed, the engine fell back, and the 2D art that covers for it
+  was good enough to hide the failure. Every effect setup now mints a fresh
+  canvas element. No test caught this because the suite mocked the one call
+  that fails.
+- **The bundle gate was under-measuring route `/` by about 15 kB.** It read the
+  page's own manifest entry and missed the chunks the root layout pulls in, so
+  every "we have headroom" decision was made against a number lower than what
+  browsers actually download. It now unions both, verified against the script
+  tags in the emitted HTML. The gate also reports a breach instead of crashing
+  on an unresolvable manifest key.
+- GPGPU render targets no longer hardcode 32-bit float. A capability probe picks
+  float, then half-float, then reports that neither is available so the caller
+  can take a CPU path. It reads the *renderability* extensions, not the
+  sampling-only `OES_texture_float`, which a context can advertise while still
+  failing framebuffer completeness — the exact false positive that renders a
+  simulation silently black. The particle scene took that unsafe default and
+  now probes.
+- Pointer tracking handles `pointercancel`, so a touch that turns into a scroll
+  no longer leaves the pointer latched down.
+
+### Added
+- A per-view `VIEW_READY` signal on both hosts, so a component can wait for
+  *its own* view to be live rather than for the engine object to exist.
+- A risograph grain post-effect, and the post-processing chain that renders it.
+  `Post` had been dead code since it was written: nothing in the repo ever
+  constructed one.
+- Quality-tier detection split into a module with no three.js dependency, which
+  is what lets the landing page decide how much to load before loading it.
+
 ## [0.2.1.0] - 2026-08-04
 
 ### Changed

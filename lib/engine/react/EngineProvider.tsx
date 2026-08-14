@@ -174,11 +174,11 @@ export default function EngineProvider({ children }: EngineProviderProps) {
 
     const reducedMotion = detectReducedMotion();
     setReducedMotion(reducedMotion);
-    // Cache warm only: start a scene-chunk import while the engine core
+    // Cache warm only: start the landing scene import while the engine core
     // modules and worker host are being fetched. The worker's matching import
     // then reuses the browser's warm HTTP cache. Failures are contained because
     // this speculative request is not an initialization dependency.
-    void sceneRegistry["hero-can"]()
+    void sceneRegistry["origin-film"]()
       .then((scene) => scene.dispose())
       .catch(() => {});
 

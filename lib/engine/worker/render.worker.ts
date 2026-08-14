@@ -135,7 +135,7 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
   const msg = ev.data;
   switch (msg.type) {
     case "INIT":
-      handleInit(msg.canvas, msg.dpr, msg.quality, msg.reducedMotion);
+      handleInit(msg.canvas, msg.dpr, msg.quality, msg.reducedMotion, msg.route);
       break;
     case "FRAME_STATE":
       pendingFrameState = msg.state;
@@ -144,7 +144,7 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
       handleResize(msg.width, msg.height, msg.dpr);
       break;
     case "VIEW_ADD":
-      handleViewAdd(msg.viewId, msg.sceneId, msg.rect);
+      handleViewAdd(msg.viewId, msg.sceneId, msg.rect, msg.post === true);
       break;
     case "VIEW_REMOVE":
       bumpGeneration(msg.viewId);
@@ -163,7 +163,13 @@ ctx.onmessage = (ev: MessageEvent<MainToWorker>) => {
   }
 };
 
-function handleInit(canvas: OffscreenCanvas, dpr: number, initialQuality: QualityTier, initialReducedMotion: boolean): void {
+function handleInit(
+  canvas: OffscreenCanvas,
+  dpr: number,
+  initialQuality: QualityTier,
+  initialReducedMotion: boolean,
+  route?: string,
+): void {
   quality = initialQuality;
   reducedMotion = initialReducedMotion;
   // F5 fix: `canvas.width`/`canvas.height` on a just-transferred
@@ -202,13 +208,20 @@ function handleInit(canvas: OffscreenCanvas, dpr: number, initialQuality: Qualit
   });
   stage = new Stage(renderer, currentFrameInput(), {
     onError: (err, viewId) => console.error(`[deep-wave worker] view ${viewId} scene init failed`, err),
+    onViewReady: (viewId) => ctx.postMessage({ type: "VIEW_READY", viewId }),
+    // A worker has no `location` for the page that spawned it, so the route
+    // arrives on the INIT message. Omitting it is not neutral: gl/post.ts
+    // reads an undefined route as "I do not know where I am" and builds NO
+    // riso grain effect, so the chain would silently run bloom + SMAA only.
+    route,
   });
 
-  // NOTE: gl/post.ts's `Post` composer is constructed with a single fixed
-  // (scene, camera) pair, but each Stage view owns its own scene/camera —
-  // there's no documented way yet to point one shared composer at whichever
-  // view is currently rendering. Skipping post-processing here until gl/Post
-  // (or gl/Stage) exposes a scene/camera swap; see the M1 return notes.
+  // Post-processing IS wired here now. It used to be skipped with a note that
+  // a composer is bound to one (scene, camera) pair while each Stage view owns
+  // its own — that gap is closed: gl/post.ts's `setSceneCamera()` re-points the
+  // chain each frame and gl/stage.ts's `resolvePostView()` decides which view
+  // (if any) may use it. Nothing more is needed on this side; a view opts in
+  // with VIEW_ADD's `post` flag, exactly as on the main thread.
 
   contextLoss = new ContextLossHandler(canvas as unknown as ContextLossTarget, {
     onLost: () => ctx.postMessage({ type: "CONTEXT_LOST" }),
@@ -238,7 +251,12 @@ function handleResize(width: number, height: number, dpr: number): void {
   stage?.setFrame(currentFrameInput());
 }
 
-function handleViewAdd(viewId: number, sceneId: SceneId, rect: RectData): void {
+function handleViewAdd(
+  viewId: number,
+  sceneId: SceneId,
+  rect: RectData,
+  post: boolean,
+): void {
   const generation = bumpGeneration(viewId);
   loadScene(sceneId)
     .then((module) => {
@@ -253,7 +271,7 @@ function handleViewAdd(viewId: number, sceneId: SceneId, rect: RectData): void {
         return;
       }
       moduleByView.set(viewId, module);
-      stage?.addView(viewId, rect, module);
+      stage?.addView(viewId, rect, module, { post });
     })
     .catch((err: unknown) => {
       console.error(`[deep-wave worker] scene "${sceneId}" (view ${viewId}) failed to load`, err);
@@ -301,11 +319,17 @@ function tick(time: number): void {
     pendingFrameState = null;
   }
 
-  // Reduced motion: static frames — advance no scene animation state, but
-  // still render so a real scroll/progress change is reflected (§6 a11y).
-  if (!reducedMotion) {
-    stage.update(dt);
-  }
+  // Reduced motion (§6 a11y): scroll-driven pose still updates, ambient
+  // animation does not. `dt = 0` is the whole mechanism, and it is not the
+  // same as skipping `update()` outright — which is what this used to do.
+  // `Stage.update()` is the ONLY caller of `SceneModule.update()` and
+  // `onProgress()`, so skipping it froze every scene at whatever pose its
+  // `init()` seeded and left `progress` at its init-time value: the origin
+  // film simply did not respond to scroll for a reduced-motion visitor, for
+  // fifteen viewports, contradicting its own documented contract ("Scroll IS
+  // the film"). Handing over a zero dt keeps the scroll-driven half live
+  // while every `elapsed += dt` spin, flutter and drift stands still.
+  stage.update(reducedMotion ? 0 : dt);
 
   const renderStart = now();
   stage.render();
@@ -336,7 +360,9 @@ function applyFrameState(buf: Float32Array): void {
   lastPointer = pointer;
 
   for (const v of state.views) {
-    stage?.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height });
+    // Slot 5's packed progress is authoritative — see gl/view.ts
+    // View.progressOverride and worker/host.ts's matching call.
+    stage?.updateRect(v.viewId, { top: v.top, left: v.left, width: v.width, height: v.height }, v.progress);
   }
   stage?.setFrame(currentFrameInput());
 }

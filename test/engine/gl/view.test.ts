@@ -7,12 +7,14 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  VIEWPORT_COVER_TOLERANCE,
   VIEW_FOV,
   View,
   cameraDistanceForHeight,
   computeInView,
   computeProgress,
   computeScissorRect,
+  coversViewport,
 } from "@/lib/engine/gl/view";
 import type { SceneModule, ViewContext } from "@/lib/engine/types";
 
@@ -128,10 +130,77 @@ describe("View", () => {
     expect(view.progress(900, 800)).toBeGreaterThan(0);
   });
 
+  it("prefers a main-thread progress override over its own rect-derived value", () => {
+    const view = new View(0, { top: 1000, left: 0, width: 100, height: 200 }, noopScene());
+    const derived = view.progress(900, 800);
+
+    view.setProgress(0.25);
+    expect(view.progress(900, 800)).toBe(0.25);
+    // ...and the override is scroll-independent: it IS the answer, not a seed.
+    expect(view.progress(5000, 800)).toBe(0.25);
+    expect(derived).not.toBe(0.25);
+  });
+
+  it("clamps an override to 0..1 and restores rect-derived progress on null", () => {
+    const view = new View(0, { top: 1000, left: 0, width: 100, height: 200 }, noopScene());
+    const derived = view.progress(900, 800);
+
+    view.setProgress(1.4);
+    expect(view.progress(900, 800)).toBe(1);
+    view.setProgress(-0.3);
+    expect(view.progress(900, 800)).toBe(0);
+
+    view.setProgress(null);
+    expect(view.progress(900, 800)).toBe(derived);
+  });
+
   it("owns a distinct THREE.Scene per instance", () => {
     const a = new View(0, { top: 0, left: 0, width: 100, height: 100 }, noopScene());
     const b = new View(1, { top: 0, left: 0, width: 100, height: 100 }, noopScene());
     expect(a.scene).not.toBe(b.scene);
     expect(a.scene).toBeInstanceOf(THREE.Scene);
+  });
+});
+
+describe("coversViewport — the precondition for running a view through the post composer", () => {
+  // A composer paints and clears the entire drawing buffer, so Stage may only
+  // point one at a view that owns the entire canvas. These are the cases that
+  // decide whether post engages at all.
+  const viewportW = 800;
+  const viewportH = 600;
+
+  it("accepts a pinned full-viewport rect (the sticky film stage)", () => {
+    expect(coversViewport({ top: 1200, left: 0, width: 800, height: 600 }, 1200, viewportW, viewportH)).toBe(true);
+  });
+
+  it("accepts a rect taller than the viewport that currently straddles it", () => {
+    // Scrolled halfway through a 2000px section: top is above the viewport,
+    // bottom is below it — the canvas is fully covered.
+    expect(coversViewport({ top: 0, left: 0, width: 800, height: 2000 }, 700, viewportW, viewportH)).toBe(true);
+  });
+
+  it("rejects a rect that is only partly scrolled into view", () => {
+    // Top edge is 300px down the viewport: the upper 300px of the canvas is
+    // not this view's, so a composer would erase whatever is there.
+    expect(coversViewport({ top: 300, left: 0, width: 800, height: 600 }, 0, viewportW, viewportH)).toBe(false);
+  });
+
+  it("rejects a rect narrower than the viewport even when it is vertically full", () => {
+    expect(coversViewport({ top: 0, left: 0, width: 400, height: 600 }, 0, viewportW, viewportH)).toBe(false);
+  });
+
+  it("rejects a full-width rect that is inset from the left edge", () => {
+    expect(coversViewport({ top: 0, left: 40, width: 800, height: 600 }, 0, viewportW, viewportH)).toBe(false);
+  });
+
+  it("rejects a rect shorter than the viewport", () => {
+    expect(coversViewport({ top: 0, left: 0, width: 800, height: 599 - VIEWPORT_COVER_TOLERANCE }, 0, viewportW, viewportH)).toBe(false);
+  });
+
+  it("tolerates sub-pixel shortfall, because DOM-measured sticky rects are fractional", () => {
+    const short = { top: 0.4, left: 0.4, width: 799.4, height: 599.4 };
+    expect(coversViewport(short, 0, viewportW, viewportH)).toBe(true);
+    // …but a caller demanding an exact match can say so, and then it fails.
+    expect(coversViewport(short, 0, viewportW, viewportH, 0)).toBe(false);
   });
 });

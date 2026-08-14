@@ -159,6 +159,7 @@ export interface AssetManager {
 
 export type SceneId =
   | "hero-can"
+  | "origin-film"
   | "exploded"
   | "particles"
   | "pointer-field"

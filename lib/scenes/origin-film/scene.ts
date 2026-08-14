@@ -20,6 +20,7 @@ import {
   buildLeaves,
   buildMachine,
   buildShelf,
+  type BuiltShelf,
 } from "./rig";
 import { loadOriginAssets, type OriginAssets } from "./gltf";
 
@@ -196,7 +197,7 @@ class OriginFilmScene implements SceneModule {
   private carton: THREE.Group | null = null;
   private hand: THREE.Object3D | null = null;
   private can: BuiltCan | null = null;
-  private shelfCans: BuiltCan[] = [];
+  private shelf: BuiltShelf | null = null;
   private pollen: PollenField | null = null;
   /**
    * Pure state machine — no listeners, timers or GPU resources — so dropping
@@ -218,6 +219,7 @@ class OriginFilmScene implements SceneModule {
   private width = 1;
   private height = 1;
   private quality: QualityTier = "high";
+  private compactRig = false;
   private progress = 0;
   private elapsed = 0;
   private pointerHit: { x: number; y: number } | null = null;
@@ -238,6 +240,7 @@ class OriginFilmScene implements SceneModule {
     this.width = Math.max(1, ctx.size.width);
     this.height = Math.max(1, ctx.size.height);
     this.quality = ctx.quality;
+    this.compactRig = ctx.quality === "low" || ctx.size.width < 768;
     this.elapsed = 0;
     this.pointerHit = null;
     this.pointerEventPending = false;
@@ -266,9 +269,9 @@ class OriginFilmScene implements SceneModule {
     this.world.add(this.brew);
 
     this.basket = buildBasket();
-    this.machine = buildMachine();
+    this.machine = buildMachine({ simplified: this.compactRig });
     this.carton = buildCarton();
-    this.hand = buildHand();
+    this.hand = buildHand({ silhouette: this.compactRig });
     this.world.add(this.basket, this.machine, this.carton, this.hand);
 
     this.can = buildCan(MINT);
@@ -277,14 +280,9 @@ class OriginFilmScene implements SceneModule {
     this.world.add(this.can.group);
     setCanOpacity(this.can, 0);
 
-    this.shelfCans = buildShelf(counts.shelfCans);
-    this.shelfCans.forEach((built, index) => {
-      built.group.name = `origin-film-shelf-can-${index}`;
-      built.group.position.set(shelfCanX(index, counts.shelfCans), -155, 55);
-      built.group.scale.setScalar(0.5);
-      this.world!.add(built.group);
-      setCanOpacity(built, 0);
-    });
+    this.shelf = buildShelf(counts.shelfCans);
+    this.world.add(this.shelf.group);
+    this.shelf.setOpacity(0);
 
     // `floatSupport` is optional on ViewContext: `undefined` means nobody
     // probed the context, and ViewContext's own contract says to read that as
@@ -313,9 +311,9 @@ class OriginFilmScene implements SceneModule {
     );
 
     ctx.scene.add(this.root);
-    // Hosts still render under reduced motion but intentionally skip their
-    // per-frame Stage.update(). Apply one seeded static pose here so that
-    // mode never exposes the builders' hidden/zero-opacity setup state.
+    // Seed a pose immediately so the first draw never exposes the builders'
+    // hidden/zero-opacity setup state. Reduced-motion hosts keep calling
+    // Stage.update() with dt = 0, so scroll poses advance without idle motion.
     this.update(0, ctx);
 
     // Fire-and-forget: the film renders the procedural rig from this frame on,
@@ -323,28 +321,30 @@ class OriginFilmScene implements SceneModule {
     // captured after dispose() bumped it, so a result from a previous init (or
     // one that arrives after this scene is torn down) is recognised as stale
     // and freed instead of attached to a dead graph.
-    const world = this.world;
-    void loadOriginAssets()
-      .then((assets) => {
-        if (this.generation !== generation || this.world !== world) {
-          disposeLoadedAssets(assets);
-          return;
-        }
+    if (!this.compactRig) {
+      const world = this.world;
+      void loadOriginAssets()
+        .then((assets) => {
+          if (this.generation !== generation || this.world !== world) {
+            disposeLoadedAssets(assets);
+            return;
+          }
 
-        if (assets.hand && this.hand) {
-          this.hand = replaceProceduralObject(world, this.hand, assets.hand);
-        }
-        if (assets.machine && this.machine) {
-          this.machine = replaceProceduralObject(world, this.machine, assets.machine);
-        }
-      })
-      // loadOriginAssets never rejects, so this only catches a throw from the
-      // swap itself. Inside a worker an unhandled rejection can take the whole
-      // render loop down, and losing the film to a failed cosmetic upgrade
-      // would be a strictly worse outcome than keeping the procedural rig.
-      .catch((error: unknown) => {
-        console.warn(`[origin-film] asset swap failed: ${String(error)}`);
-      });
+          if (assets.hand && this.hand) {
+            this.hand = replaceProceduralObject(world, this.hand, assets.hand);
+          }
+          if (assets.machine && this.machine) {
+            this.machine = replaceProceduralObject(world, this.machine, assets.machine);
+          }
+        })
+        // loadOriginAssets never rejects, so this only catches a throw from the
+        // swap itself. Inside a worker an unhandled rejection can take the whole
+        // render loop down, and losing the film to a failed cosmetic upgrade
+        // would be a strictly worse outcome than keeping the procedural rig.
+        .catch((error: unknown) => {
+          console.warn(`[origin-film] asset swap failed: ${String(error)}`);
+        });
+    }
   }
 
   onProgress(progress: number): void {
@@ -366,7 +366,8 @@ class OriginFilmScene implements SceneModule {
       !this.machine ||
       !this.carton ||
       !this.hand ||
-      !this.can
+      !this.can ||
+      !this.shelf
     ) {
       return;
     }
@@ -441,7 +442,7 @@ class OriginFilmScene implements SceneModule {
     this.root?.parent?.remove(this.root);
 
     this.can?.dispose();
-    for (const built of this.shelfCans) built.dispose();
+    this.shelf?.dispose();
 
     if (this.leaves) {
       this.leaves.geometry.dispose();
@@ -482,7 +483,7 @@ class OriginFilmScene implements SceneModule {
     this.carton = null;
     this.hand = null;
     this.can = null;
-    this.shelfCans = [];
+    this.shelf = null;
     this.pointerHit = null;
     this.pointerEventPending = false;
   }
@@ -642,19 +643,24 @@ class OriginFilmScene implements SceneModule {
   }
 
   private renderShelf(pose: Origin3DPose, pointerX: number): void {
-    const shelfCount = this.shelfCans.length;
+    const shelf = this.shelf!;
+    const shelfCount = shelf.count;
     const hero = heroShelfIndex(shelfCount);
+    shelf.setOpacity(pose.shelf);
 
-    this.shelfCans.forEach((built, index) => {
-      setCanOpacity(built, pose.shelf);
-      built.group.position.set(shelfCanX(index, shelfCount), -150, 55);
-      built.group.rotation.y = pointerX * 0.12;
+    for (let index = 0; index < shelfCount; index += 1) {
+      this.position.set(shelfCanX(index, shelfCount), -150, 55);
+      this.euler.set(0, pointerX * 0.12, 0);
 
       if (index === hero) {
-        built.group.rotation.z = -pose.shelf * 0.08;
-        built.group.position.y += pose.shelf * 24;
+        this.euler.z = -pose.shelf * 0.08;
+        this.position.y += pose.shelf * 24;
       }
-    });
+      this.quaternion.setFromEuler(this.euler);
+      this.scale.setScalar(0.5);
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      shelf.setMatrixAt(index, this.matrix);
+    }
   }
 
   private renderHand(pose: Origin3DPose): void {
@@ -665,7 +671,7 @@ class OriginFilmScene implements SceneModule {
       340 - pose.grip * 330,
     );
     this.hand!.rotation.set(-pose.grip * 0.75, 0, pose.grip * 0.1);
-    this.hand!.scale.setScalar(this.quality === "low" ? 0.75 : 1);
+    this.hand!.scale.setScalar(this.compactRig ? 0.75 : 1);
   }
 }
 

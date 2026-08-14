@@ -47,6 +47,7 @@ class MutableTrackedRect implements TrackedRect {
 interface Entry {
   el: Element;
   rect: MutableTrackedRect;
+  references: number;
 }
 
 export class RectTracker {
@@ -63,16 +64,22 @@ export class RectTracker {
    * returns the same live `TrackedRect` instead of creating a duplicate. */
   track(el: Element): TrackedRect {
     const existing = this.entries.get(el);
-    if (existing) return existing.rect;
+    if (existing) {
+      existing.references += 1;
+      return existing.rect;
+    }
 
     const rect = new MutableTrackedRect();
-    this.entries.set(el, { el, rect });
+    this.entries.set(el, { el, rect, references: 1 });
     this.measureOne(el, rect, this.lastScrollY);
     return rect;
   }
 
   untrack(el: Element): void {
-    this.entries.delete(el);
+    const entry = this.entries.get(el);
+    if (!entry) return;
+    entry.references -= 1;
+    if (entry.references <= 0) this.entries.delete(el);
   }
 
   /** Re-measures every tracked element's viewport rect and converts it to

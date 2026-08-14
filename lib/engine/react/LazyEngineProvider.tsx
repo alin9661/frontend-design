@@ -31,19 +31,35 @@
 // framer's `useReducedMotion` (not core/reduced-motion.ts) on purpose: it is
 // the exact hook OriginStory branches on, already in this bundle, so the two
 // decisions cannot disagree about whether a view will ever exist.
+// The reduced-motion branch still paints the riso texture through the tiny
+// DOM-only StaticRisoGrain component; it never mounts a canvas or worker.
 
 import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { useReducedMotion } from "framer-motion";
 import OriginStory from "@/components/OriginStory";
 
 const EngineProvider = lazy(() => import("./EngineProvider"));
+const ReducedMotionGrain = lazy(() =>
+  import("./RisoGrainOverlay").then((module) => ({ default: module.StaticRisoGrain })),
+);
 
 export default function LazyEngineProvider({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const prefersReducedMotion = useReducedMotion();
   useEffect(() => setMounted(true), []);
 
-  if (!mounted || prefersReducedMotion) return <OriginStory />;
+  if (!mounted) return <OriginStory />;
+
+  if (prefersReducedMotion) {
+    return (
+      <>
+        <OriginStory />
+        <Suspense fallback={null}>
+          <ReducedMotionGrain source="reduced-motion" />
+        </Suspense>
+      </>
+    );
+  }
 
   return (
     <Suspense fallback={<OriginStory />}>

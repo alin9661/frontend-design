@@ -171,7 +171,7 @@ export function generateOriginTimeline(weights: readonly number[]): GeneratedOri
     // film rather than naming a landmark: they are ambient drift, not a beat,
     // so they are already retune-proof and pinning them to chapter 01's hold
     // and chapter 07's peak would freeze the foliage for the first ~11% and
-    // last ~14% of the scroll — on a 1500svh film, several dead viewports.
+    // last ~14% of the scroll — on an 800svh film, a deliberate final hold.
     // Their weight-invariance is asserted, not assumed, in the track tests.
     foliageY: { input: [FILM_START, FILM_END], output: [120, -360] },
     copyY: { input: [FILM_START, FILM_END], output: [24, -8] },

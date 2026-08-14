@@ -10,13 +10,9 @@
 // via `new Worker(new URL("./render.worker.ts", import.meta.url))` (static
 // specifier, required for Next 15/webpack worker bundling).
 //
-// This mirrors worker/host.ts's MainThreadHost pipeline as closely as gl/'s
-// current public API allows — see the TODO/NOTE comment below for the one
-// remaining spot where it can't (Post's composer needs a fixed scene/camera
-// at construction; gl/Stage doesn't yet expose a way to swap it to whichever
-// view is currently rendering). That's a cross-workstream contract gap for
-// whoever extends gl/Post/gl/Stage next, not a bug in this file — see the M1
-// "worker" workstream return notes.
+// This mirrors worker/host.ts's MainThreadHost pipeline. Post-processing is
+// symmetric too: Stage selects the eligible full-canvas view and Post repoints
+// its scene/camera before rendering (see handleInit below).
 //
 // Worker-side raycasting: per tick, after rendering, `runViewRaycasts()`
 // (gl/raycast.ts) raycasts every registered view's interactive objects

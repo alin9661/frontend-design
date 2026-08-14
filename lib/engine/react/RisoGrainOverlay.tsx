@@ -12,10 +12,9 @@
 // defines a `postprocessing` Effect over `three`, and a component that pulls
 // that in would put the entire GL graph into a route's first-load JS.
 //
-// Rendered as a sibling of <GlCanvas/> inside EngineProvider, so it inherits
-// the same fixed, full-viewport, decorative, pointer-transparent footprint the
-// canvas has — and costs `/` nothing, because EngineProvider is itself behind
-// a post-mount dynamic import.
+// RisoGrainOverlay renders beside <GlCanvas/> inside EngineProvider for low-tier
+// fallback. StaticRisoGrain is also used directly by LazyEngineProvider's
+// reduced-motion branch, preserving the texture without mounting GL.
 
 "use client";
 
@@ -33,6 +32,27 @@ export interface RisoGrainOverlayProps {
   route: string | undefined;
 }
 
+export interface StaticRisoGrainProps {
+  /** Names the non-GL path in markup so tests and diagnostics can distinguish ownership. */
+  source?: "fallback" | "reduced-motion";
+}
+
+/** Paint the shared, motionless print texture without importing any GL code. */
+export function StaticRisoGrain({ source = "fallback" }: StaticRisoGrainProps) {
+  return (
+    <div
+      aria-hidden="true"
+      data-riso-grain-fallback={source === "fallback" ? "" : undefined}
+      data-riso-grain-static={source === "reduced-motion" ? "" : undefined}
+      // `z-0` and `fixed inset-0` mirror GlCanvas: the grain sits on the same
+      // plane the GL pass would have composited into, under every section's
+      // own content. `mixBlendMode: multiply` comes from the descriptor.
+      className="pointer-events-none fixed inset-0 z-0"
+      style={RISO_GRAIN_FALLBACK.style}
+    />
+  );
+}
+
 /**
  * Renders the static print texture, or nothing at all.
  *
@@ -48,15 +68,5 @@ export default function RisoGrainOverlay({
   if (quality === null || route === undefined) return null;
   if (risoGrainMode({ quality, reducedMotion, route }) !== "fallback") return null;
 
-  return (
-    <div
-      aria-hidden="true"
-      data-riso-grain-fallback=""
-      // `z-0` and `fixed inset-0` mirror GlCanvas: the grain sits on the same
-      // plane the GL pass would have composited into, under every section's
-      // own content. `mixBlendMode: multiply` comes from the descriptor.
-      className="pointer-events-none fixed inset-0 z-0"
-      style={RISO_GRAIN_FALLBACK.style}
-    />
-  );
+  return <StaticRisoGrain />;
 }

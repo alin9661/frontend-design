@@ -15,7 +15,6 @@ import {
   useMotionValueEvent,
   useReducedMotion,
   useScroll,
-  useSpring,
   useTransform,
   type MotionValue,
 } from "framer-motion";
@@ -27,7 +26,7 @@ import ChapterScrubber, {
 import { EngineContext } from "@/lib/engine/react/engine-context";
 import { useView } from "@/lib/engine/react/useView";
 import { flavors, flavorById } from "@/lib/flavors";
-import { CTA_SPRING, ORIGIN_SCROLL_SPRING, SWAP } from "@/lib/motion";
+import { CTA_SPRING, SWAP } from "@/lib/motion";
 import { AutoSectionInkContext, pickInk } from "@/lib/section-ink";
 import {
   DRAG_INSPECT_TOUCH_ACTION,
@@ -89,7 +88,7 @@ const FINAL_CHAPTER_INDEX = originChapters.length - 1;
  * never reads `state.yaw`, and it deliberately never calls `update()` — the
  * axis lock is pure geometry, so the arbiter costs zero frames.
  *
- * The rules that matter, because getting them wrong turns a 1200svh page into
+ * The rules that matter, because getting them wrong turns a 650/800svh page into
  * a scroll trap — or an un-zoomable one — on touch:
  *
  *  1. The hit element carries `touch-action: pan-y pinch-zoom`
@@ -718,7 +717,7 @@ function StaticStory() {
         <article
           key={chapter.number}
           id={originChapterId(chapter.number)}
-          className={`grid min-h-[80svh] place-items-center px-6 py-20 ${
+          className={`grid min-h-[80svh] scroll-mt-32 place-items-center px-6 py-20 md:scroll-mt-40 ${
             index === 6 ? "bg-cream text-forest" : "border-t border-cream/15"
           }`}
         >
@@ -795,7 +794,7 @@ function RegisteredOriginFilmStage({
   onViewId: (viewId: number | null) => void;
 }) {
   // `sticky` is load-bearing, not decorative: this div is one viewport tall
-  // and pinned inside a 1200/1500svh section, so the engine's static rect
+  // and pinned inside a 650/800svh section, so the engine's static rect
   // measurement would cull the GL after a single viewport and hand the scene
   // a progress that starts at 0.5. It makes the engine drive progress off the
   // parent section — the same range the DOM film's useScroll() uses.
@@ -837,7 +836,10 @@ function AnimatedOriginStory() {
     target: sectionRef,
     offset: ["start start", "end end"],
   });
-  const progress = useSpring(scrollYProgress, ORIGIN_SCROLL_SPRING);
+  // This raw MotionValue is the film's single clock. The timeline tracks own
+  // the authored easing; adding a second spring here would make the DOM lag
+  // the engine's directly sampled sticky progress during fast/reverse scroll.
+  const progress = scrollYProgress;
   const backgroundColor = useTransform(
     progress,
     originBackgroundTrack.input,
@@ -876,7 +878,7 @@ function AnimatedOriginStory() {
   // wrong twice over: mid-film it is a muddy mid-tone over the amber stop
   // (~1.7:1 against #9A5A2D, unreadable), and because every frame mints a new
   // interpolated color it would push a fresh state update through
-  // SectionInkProvider on every frame of a 1500svh scroll. pickInk collapses
+  // SectionInkProvider on every frame of an 800svh scroll. pickInk collapses
   // to exactly two values, so this settles to a no-op except at the crossings.
   useMotionValueEvent(backgroundColor, "change", (value) => {
     const next = pickInk(value);
@@ -975,7 +977,7 @@ function AnimatedOriginStory() {
       data-layout="sticky"
       data-origin-film
       style={{ color: inkColor }}
-      className="relative h-[1200svh] md:h-[1500svh]"
+      className="relative h-[650svh] md:h-[800svh]"
     >
       <m.div
         aria-hidden="true"

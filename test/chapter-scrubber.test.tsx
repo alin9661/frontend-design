@@ -4,7 +4,7 @@ import { motionValue, type MotionValue } from "framer-motion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ChapterScrubber, { originChapterId } from "@/components/origin/ChapterScrubber";
 import OriginStory from "@/components/OriginStory";
-import { originChapters } from "@/lib/visuals/origin-timeline";
+import { isActive, originChapters } from "@/lib/visuals/origin-timeline";
 import { setReducedMotion } from "./setup";
 
 describe("components/origin/ChapterScrubber", () => {
@@ -49,10 +49,11 @@ describe("components/origin/ChapterScrubber", () => {
     fireEvent.click(screen.getByRole("link", { name: /03.*made into mate/i }));
 
     // Derived, so a reweighting retunes it rather than breaking it — but it
-    // still pins the arithmetic (section top + travel × the chapter's PEAK),
-    // so aiming at band.in or band.hold instead would fail.
+    // still pins the arithmetic (section top + travel × the chapter's PEAK,
+    // then one pixel inside its interval), so aiming at band.in/hold or the
+    // unstable exact boundary would fail.
     expect(scrollTo).toHaveBeenCalledWith({
-      top: 200 + 7000 * originChapters[2].band.peak,
+      top: 200 + 7000 * originChapters[2].band.peak + 1,
       behavior: "smooth",
     });
     // A plain sanity floor on the derivation itself: chapter 03 of seven has
@@ -60,6 +61,8 @@ describe("components/origin/ChapterScrubber", () => {
     const { top } = scrollTo.mock.calls.at(-1)![0] as ScrollToOptions;
     expect(top).toBeGreaterThan(200);
     expect(top).toBeLessThan(200 + 7000 * 0.5);
+    expect(isActive(2, (Number(top) - 200) / 7000)).toBe(true);
+    expect(isActive(1, (Number(top) - 200) / 7000)).toBe(false);
     expect(screen.getByRole("link", { name: /03.*made into mate/i })).toHaveAttribute("aria-current", "step");
   });
 
@@ -72,7 +75,7 @@ describe("components/origin/ChapterScrubber", () => {
     fireEvent.click(screen.getByRole("link", { name: /03.*made into mate/i }));
 
     expect(scrollTo).toHaveBeenCalledWith({
-      top: 200 + 7000 * originChapters[2].band.peak,
+      top: 200 + 7000 * originChapters[2].band.peak + 1,
       behavior: "auto",
     });
   });

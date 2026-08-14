@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import type { QualityTier, ViewContext } from "@/lib/engine/types";
 import { loadScene, sceneRegistry } from "@/lib/engine/worker/scene-registry";
+import { flavors } from "@/lib/flavors";
 import { glPalette } from "@/lib/palette";
 import {
   buildBasket,
@@ -68,6 +69,20 @@ function pollenMotes(ctx: ViewContext): THREE.InstancedMesh {
 
 function pollenPoints(ctx: ViewContext): THREE.Points {
   return ctx.scene.getObjectByName("origin-film-pollen-points") as THREE.Points;
+}
+
+function shelfShells(ctx: ViewContext): THREE.InstancedMesh {
+  return ctx.scene.getObjectByName("origin-film-shelf-shells") as THREE.InstancedMesh;
+}
+
+function shelfTransform(mesh: THREE.InstancedMesh, index: number) {
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  mesh.getMatrixAt(index, matrix);
+  matrix.decompose(position, quaternion, scale);
+  return { position, rotation: new THREE.Euler().setFromQuaternion(quaternion), scale };
 }
 
 function instancePose(mesh: THREE.InstancedMesh): Float32Array {
@@ -157,6 +172,19 @@ describe("lib/scenes/origin-film/rig", () => {
     disposeGroup(machine);
   });
 
+  it("buildMachine reduces the mobile rig to two low-segment rollers and one drum", () => {
+    const machine = buildMachine({ simplified: true });
+    const rollers = machine.children.slice(0, 2) as THREE.Mesh[];
+
+    expect(machine.userData.variant).toBe("simplified");
+    expect(machine.children).toHaveLength(3);
+    expect(rollers.map((roller) => roller.position.x)).toEqual([-54, 54]);
+    expect((rollers[0]!.geometry as THREE.CylinderGeometry).parameters.radialSegments).toBe(8);
+    expect(machine.children[2]!.position.toArray()).toEqual([0, 98, -20]);
+
+    disposeGroup(machine);
+  });
+
   it("buildCarton assembles its box, two open flaps, and tape", () => {
     const carton = buildCarton();
 
@@ -180,16 +208,40 @@ describe("lib/scenes/origin-film/rig", () => {
     disposeGroup(hand);
   });
 
-  it("buildShelf returns canonical flavors and clamps counts to the available range", () => {
+  it("buildHand uses one unlit mesh for the mobile silhouette", () => {
+    const hand = buildHand({ silhouette: true });
+    const silhouette = hand.children[0] as THREE.Mesh;
+
+    expect(hand.userData.variant).toBe("silhouette");
+    expect(hand.children).toHaveLength(1);
+    expect(silhouette.name).toBe("origin-film-hand-silhouette");
+    expect(silhouette.geometry).toBeInstanceOf(THREE.ShapeGeometry);
+    expect(silhouette.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    expect(hand.visible).toBe(false);
+
+    disposeGroup(hand);
+  });
+
+  it("buildShelf instances four shared can parts in canonical flavor colors and clamps counts", () => {
     const three = buildShelf(3);
     const all = buildShelf(99);
     const none = buildShelf(-1);
+    const shellColor = new THREE.Color();
+    const labelColor = new THREE.Color();
 
-    expect(three.map((built) => built.group.name)).toEqual(["can-lemon", "can-peach", "can-mint"]);
-    expect(all).toHaveLength(5);
-    expect(none).toEqual([]);
+    expect(three.group.name).toBe("origin-film-shelf");
+    expect(Object.values(three.parts).every((part) => part instanceof THREE.InstancedMesh)).toBe(true);
+    expect(Object.values(three.parts).map((part) => part.count)).toEqual([3, 3, 3, 3]);
+    three.parts.shell.getColorAt(0, shellColor);
+    three.parts.label.getColorAt(0, labelColor);
+    expect(shellColor.getHexString()).toBe(new THREE.Color(flavors[0]!.can).getHexString());
+    expect(labelColor.getHexString()).toBe(new THREE.Color(flavors[0]!.accent).getHexString());
+    expect(all.count).toBe(5);
+    expect(none.count).toBe(0);
 
-    for (const built of [...three, ...all]) built.dispose();
+    three.dispose();
+    all.dispose();
+    none.dispose();
   });
 });
 
@@ -230,11 +282,38 @@ describe("lib/scenes/origin-film/scene", () => {
       scene.init(ctx);
 
       const leaves = ctx.scene.getObjectByName("origin-film-leaves") as THREE.InstancedMesh;
-      const shelf = world(ctx).children.filter((child) =>
-        child.name.startsWith("origin-film-shelf-can-"),
-      );
       expect(leaves.count).toBe(leafCount);
-      expect(shelf).toHaveLength(shelfCount);
+      expect(shelfShells(ctx).count).toBe(shelfCount);
+
+      scene.dispose();
+    },
+  );
+
+  it.each([
+    ["low quality", "low", 800, "simplified", "silhouette", 3, 1],
+    ["mobile viewport", "high", 700, "simplified", "silhouette", 3, 1],
+    ["desktop viewport", "high", 800, "full", "articulated", 6, 5],
+  ] satisfies Array<[
+    string,
+    QualityTier,
+    number,
+    string,
+    string,
+    number,
+    number,
+  ]>)(
+    "selects the %s procedural rig by viewport and tier",
+    (_label, quality, width, machineVariant, handVariant, machineChildren, handChildren) => {
+      const ctx = makeCtx({ quality, size: { width, height: 600, dpr: 1 } });
+      const scene = createOriginFilmScene();
+      scene.init(ctx);
+
+      const machine = ctx.scene.getObjectByName("origin-film-machine") as THREE.Group;
+      const hand = ctx.scene.getObjectByName("origin-film-hand") as THREE.Group;
+      expect(machine.userData.variant).toBe(machineVariant);
+      expect(hand.userData.variant).toBe(handVariant);
+      expect(machine.children).toHaveLength(machineChildren);
+      expect(hand.children).toHaveLength(handChildren);
 
       scene.dispose();
     },
@@ -250,24 +329,27 @@ describe("lib/scenes/origin-film/scene", () => {
       const scene = createOriginFilmScene();
       scene.init(ctx);
 
-      const shelf = world(ctx)
-        .children.filter((child) => child.name.startsWith("origin-film-shelf-can-"))
-        .sort((a, b) => a.name.localeCompare(b.name));
-
       // Park the film on the stock beat so the lift is at full amplitude.
       scene.onProgress?.(originChapters[5].band.peak);
       scene.update(1 / 60, ctx);
 
-      const lifted = shelf.filter((can) => can.rotation.z !== 0);
+      const shelf = shelfShells(ctx);
+      const transforms = Array.from({ length: shelf.count }, (_, index) => shelfTransform(shelf, index));
+      const lifted = transforms
+        .map((transform, index) => ({ ...transform, index }))
+        .filter((can) => Math.abs(can.rotation.z) > 0.001);
       expect(lifted).toHaveLength(1);
-      expect(lifted[0]).toBe(shelf[heroShelfIndex(shelf.length)]);
+      expect(lifted[0]!.index).toBe(heroShelfIndex(shelf.count));
       // ...and the can that lifts is the one standing at the row's centre.
-      expect(lifted[0].position.x).toBeCloseTo(0, 9);
+      expect(lifted[0]!.position.x).toBeCloseTo(0, 9);
 
       // The whole row is still centred and evenly spaced at every count.
-      expect(shelf.reduce((sum, can) => sum + can.position.x, 0)).toBeCloseTo(0, 9);
-      for (let i = 1; i < shelf.length; i += 1) {
-        expect(shelf[i].position.x - shelf[i - 1].position.x).toBeCloseTo(SHELF_CAN_SPACING, 9);
+      expect(transforms.reduce((sum, can) => sum + can.position.x, 0)).toBeCloseTo(0, 9);
+      for (let i = 1; i < transforms.length; i += 1) {
+        expect(transforms[i]!.position.x - transforms[i - 1]!.position.x).toBeCloseTo(
+          SHELF_CAN_SPACING,
+          9,
+        );
       }
 
       scene.dispose();
@@ -286,14 +368,11 @@ describe("lib/scenes/origin-film/scene", () => {
       const scene = createOriginFilmScene();
       scene.init(ctx);
 
-      const shelf = world(ctx)
-        .children.filter((child) => child.name.startsWith("origin-film-shelf-can-"))
-        .sort((a, b) => a.name.localeCompare(b.name));
-
-      expect(shelf).toHaveLength(count);
-      shelf.forEach((can, index) => {
-        expect(can.position.x).toBeCloseTo(shelfCanX(index, count), 9);
-      });
+      const shelf = shelfShells(ctx);
+      expect(shelf.count).toBe(count);
+      for (let index = 0; index < shelf.count; index += 1) {
+        expect(shelfTransform(shelf, index).position.x).toBeCloseTo(shelfCanX(index, count), 9);
+      }
 
       scene.dispose();
     }
@@ -323,10 +402,12 @@ describe("lib/scenes/origin-film/scene", () => {
     scene.init(ctx);
     const leaves = ctx.scene.getObjectByName("origin-film-leaves") as THREE.InstancedMesh;
     const brew = ctx.scene.getObjectByName("origin-film-brew") as THREE.Mesh;
+    const shelf = shelfShells(ctx);
     const leafGeometryDispose = vi.spyOn(leaves.geometry, "dispose");
     const leafMaterialDispose = vi.spyOn(leaves.material as THREE.Material, "dispose");
     const brewGeometryDispose = vi.spyOn(brew.geometry, "dispose");
     const brewMaterialDispose = vi.spyOn(brew.material as THREE.Material, "dispose");
+    const shelfGeometryDispose = vi.spyOn(shelf.geometry, "dispose");
 
     scene.dispose();
 
@@ -335,6 +416,7 @@ describe("lib/scenes/origin-film/scene", () => {
     expect(leafMaterialDispose).toHaveBeenCalledOnce();
     expect(brewGeometryDispose).toHaveBeenCalledOnce();
     expect(brewMaterialDispose).toHaveBeenCalledOnce();
+    expect(shelfGeometryDispose).toHaveBeenCalledOnce();
   });
 
   it("seeds live per-view progress and applies the representative mid-film pose on its first update", () => {
@@ -344,7 +426,7 @@ describe("lib/scenes/origin-film/scene", () => {
     scene.init(ctx);
 
     // A top-pinned 600px view in a 600px viewport has per-view progress
-    // 0.5 at scrollY=0. update() intentionally runs before onProgress().
+    // 0.5 at scrollY=0. init() seeds that value before the first Stage sample.
     scene.update(0, ctx);
 
     const can = ctx.scene.getObjectByName("origin-film-hero-can") as THREE.Group;

@@ -19,7 +19,16 @@ export interface QualityProbe {
  * this function only applies the thresholds.
  */
 export function detectQualityTier(probe: QualityProbe): QualityTier {
-  const { hardwareConcurrency, dpr, firstFrameMs } = probe;
+  // Browser probes are typed as numbers, but privacy modes and test/device
+  // shims can still surface `undefined`/NaN at runtime. Unknown hardware must
+  // not fall through every comparison and accidentally earn the highest tier.
+  const hardwareConcurrency = Number.isFinite(probe.hardwareConcurrency)
+    ? probe.hardwareConcurrency
+    : 4;
+  const dpr = Number.isFinite(probe.dpr) ? probe.dpr : 1;
+  const firstFrameMs = Number.isFinite(probe.firstFrameMs)
+    ? probe.firstFrameMs
+    : undefined;
 
   if (hardwareConcurrency <= 2 || dpr > 2.5 || (firstFrameMs !== undefined && firstFrameMs > 32)) {
     return "low";

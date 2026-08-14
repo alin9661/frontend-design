@@ -16,6 +16,9 @@ describe("@/lib/engine/core/quality", () => {
     ["first frame above the medium boundary", { hardwareConcurrency: 8, dpr: 1, firstFrameMs: 19 }, "medium"],
     ["first frame at the medium boundary", { hardwareConcurrency: 8, dpr: 1, firstFrameMs: 18 }, "high"],
     ["omitted first-frame timing", { hardwareConcurrency: 8, dpr: 1 }, "high"],
+    ["unknown hardware concurrency", { hardwareConcurrency: Number.NaN, dpr: 1 }, "medium"],
+    ["unknown DPR", { hardwareConcurrency: 8, dpr: Number.NaN }, "high"],
+    ["unknown first-frame timing", { hardwareConcurrency: 4, dpr: 1, firstFrameMs: Number.NaN }, "medium"],
   ] as const)("maps %s to %s", (_label, probe, expected) => {
     expect(detectQualityTier(probe)).toBe(expected);
   });

@@ -235,6 +235,22 @@ describe("scripts/check-bundle.ts > checkBudgets", () => {
     expect(result!.error).toContain("(empty)");
   });
 
+  it("does not let shared layout chunks mask an empty route key", () => {
+    writeFileSync(join(dir, "layout.js"), "shared layout code");
+    const manifest = { pages: { "/layout": ["layout.js"], "/page": [] } };
+
+    const [result] = checkBudgets(
+      manifest,
+      [{ route: "/", manifestKey: "/page", budgetBytes: 1_000_000 }],
+      dir,
+    );
+
+    expect(result!.ok).toBe(false);
+    expect(result!.measuredBytes).toBeNull();
+    expect(result!.error).toContain("lists no .js chunks");
+    expect(result!.error).toContain("(empty)");
+  });
+
   it("fails when the resolved key lists only non-JS entries (css-only), naming what it did list", () => {
     const manifest = { pages: { "/page": ["static/css/app.css"] } };
 

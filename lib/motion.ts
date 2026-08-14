@@ -31,15 +31,6 @@ export const CTA_SPRING = { type: "spring", stiffness: 400, damping: 25 } as con
  * category but tuned softer for a larger, slower-settling element. */
 export const CAN_SPRING = { type: "spring", stiffness: 260, damping: 26 } as const;
 
-/** Smooths section-local scroll progress without making the story feel like
- * it is lagging behind the visitor's gesture. Kept here with the other
- * springs so the landing page has one motion vocabulary. */
-export const ORIGIN_SCROLL_SPRING = {
-  stiffness: 110,
-  damping: 30,
-  mass: 0.35,
-} as const;
-
 /** CSS-string form of the shared easing, for the rare places that animate via
  * a raw `style.transition` rather than framer-motion (a compositor-only
  * transform on a plain element, where framer would add no value). Derived from

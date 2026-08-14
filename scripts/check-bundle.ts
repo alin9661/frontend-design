@@ -36,7 +36,7 @@ function resolveNextDir(): string {
 // grow into — a breach means investigate first, raise the budget only if
 // the growth is deliberate and reviewed.
 /**
- * `/` measures 163.6 kB gzip against a 165.0 kB budget — about 1.4 kB of
+ * `/` measures 164.1 kB gzip against a 165.0 kB budget — about 0.9 kB of
  * headroom, so this budget is TIGHT: a couple of kB of new client code
  * anywhere in the landing page's tree will breach it.
  *
@@ -51,7 +51,7 @@ function resolveNextDir(): string {
  * The figure moved for a real reason, not just drift: this gate used to sum
  * ONLY the `/page` manifest key (149.4 kB) and never the root layout's own
  * client chunks, which the browser downloads on the same navigation. See
- * SHARED_MANIFEST_KEYS. 163.6 kB is the honest number — it matches the script
+ * SHARED_MANIFEST_KEYS. 164.1 kB is the honest number — it matches the script
  * tags in `.next/server/app/index.html` exactly, polyfills aside.
  *
  * What the gate is for: catching the engine/three.js bundle leaking back into
@@ -70,7 +70,7 @@ function resolveNextDir(): string {
  * behind LazyEngineProvider. */
 const HOME_BUDGET = 165_000;
 /**
- * `/deep-wave` measures 155.6 kB gzip, well under budget. (Same warning as
+ * `/deep-wave` measures 154.8 kB gzip, well under budget. (Same warning as
  * above: re-measure rather than trusting the number. A previous revision of
  * this comment said 160.2 kB while the gate printed 134.7 kB.)
  *
@@ -218,14 +218,17 @@ export function checkBudgets(
       };
     }
 
-    // The route's own chunks PLUS the root layout's — see SHARED_MANIFEST_KEYS.
-    const files = routeChunks(pages, resolvedManifestKey);
-
     // A resolved key that lists no JS at all would measure 0 bytes and sail
     // under any budget — a tooling break reported as a green gate, which is
-    // exactly as bad as the crash this script used to throw. Fail loudly.
-    if (!files.some((rel) => rel.endsWith(".js"))) {
-      const listed = files.length > 0 ? files.map((rel) => `"${rel}"`).join(", ") : "(empty)";
+    // exactly as bad as the crash this script used to throw. Inspect the
+    // route-owned entries, not the union below: a populated `/layout` must not
+    // make an empty route key look valid.
+    const routeFiles = pages[resolvedManifestKey] ?? [];
+    if (!routeFiles.some((rel) => rel.endsWith(".js"))) {
+      const listed =
+        routeFiles.length > 0
+          ? routeFiles.map((rel) => `"${rel}"`).join(", ")
+          : "(empty)";
       return {
         ...budget,
         measuredBytes: null,
@@ -237,6 +240,9 @@ export function checkBudgets(
           `budget, so this is treated as a failure. Verify the route's emitted manifest key after a completed build.`,
       };
     }
+
+    // The route's own chunks PLUS the root layout's — see SHARED_MANIFEST_KEYS.
+    const files = routeChunks(pages, resolvedManifestKey);
 
     let measuredBytes: number;
     try {

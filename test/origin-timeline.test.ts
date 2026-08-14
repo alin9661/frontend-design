@@ -150,7 +150,7 @@ describe("lib/visuals/origin-timeline", () => {
   it("keeps the two ambient parallax tracks spanning the whole film", () => {
     // foliageY and copyY are drift, not beats. Anchoring them to a landmark
     // would freeze them for the scroll outside that landmark's range — on a
-    // 1500svh film, several dead viewports at each end. Their independence
+    // 800svh film, with deliberate breathing room at each end. Their independence
     // from the weights is deliberate, so it is asserted rather than assumed.
     const reweighted = generateOriginTimeline([1, 1, 1.5, 1.2, 1, 1, 1.2]);
 

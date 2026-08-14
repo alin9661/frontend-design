@@ -697,8 +697,8 @@ export function glbPipelineDegradesToProcedural(input: {
   const checksBeforeImporting = fetchIndex >= 0 && fetchIndex < importIndex;
 
   const proceduralFallback =
-    scene.includes("buildHand()") &&
-    scene.includes("buildMachine()") &&
+    /\bbuildHand\([^)]*\)/.test(scene) &&
+    /\bbuildMachine\([^)]*\)/.test(scene) &&
     scene.includes("loadOriginAssets");
 
   return dynamicOnly && checksBeforeImporting && proceduralFallback;

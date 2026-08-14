@@ -67,7 +67,7 @@ function servesNothing(status = 404): void {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status })));
 }
 
-function makeCtx(): ViewContext {
+function makeCtx(overrides: Partial<ViewContext> = {}): ViewContext {
   return {
     scene: new THREE.Scene(),
     camera: new THREE.PerspectiveCamera(45, 800 / 600, 0.1, 10000),
@@ -85,6 +85,7 @@ function makeCtx(): ViewContext {
     size: { width: 800, height: 600, dpr: 1 },
     quality: "high",
     reducedMotion: false,
+    ...overrides,
   };
 }
 
@@ -127,6 +128,25 @@ afterEach(() => {
 });
 
 describe("origin-film GLTF integration", () => {
+  it("does not fetch or swap desktop assets for the compact mobile rig", async () => {
+    servesAsset();
+    const ctx = makeCtx({
+      size: { width: 700, height: 600, dpr: 1 },
+      quality: "high",
+    });
+    const scene = createOriginFilmScene();
+
+    scene.init(ctx);
+    await Promise.resolve();
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(loaderMocks.parseAsync).not.toHaveBeenCalled();
+    expect(ctx.scene.getObjectByName("origin-film-hand")!.userData.variant).toBe("silhouette");
+    expect(ctx.scene.getObjectByName("origin-film-machine")!.userData.variant).toBe("simplified");
+
+    scene.dispose();
+  });
+
   it("replaces both procedural nodes while preserving their live transforms and visibility", async () => {
     servesAsset();
     const pending = deferred<{ scene: THREE.Group }>();

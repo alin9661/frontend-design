@@ -60,7 +60,7 @@ function jumpToAnchor(
 
   // globals.css deliberately keeps smooth scrolling for storytelling CTAs.
   // An inline override applies only for this programmatic navigation, making
-  // header wayfinding immediate even from the 1200–1500svh origin film.
+  // header wayfinding immediate even from the 650–800svh origin film.
   const root = document.documentElement;
   const previousScrollBehavior = root.style.scrollBehavior;
   root.style.scrollBehavior = "auto";
@@ -83,7 +83,7 @@ export default function SiteHeader() {
     const onScroll = () => {
       setIsScrolled(window.scrollY > 8);
       // Pushed straight into the audio graph rather than through a `progress`
-      // prop: the film is 1200–1500svh, and re-rendering this header on every
+      // prop: the film is 650–800svh, and re-rendering this header on every
       // scroll frame to move a crossfade would be absurd. While sound is off
       // the handle is null and this costs one property read.
       soundscapeRef.current?.setProgress(originFilmProgress());

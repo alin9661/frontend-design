@@ -252,8 +252,8 @@ export class Stage {
       if (!view.inView(scrollY, viewportH, this.cullMargin)) continue;
 
       const ctx = this.buildContext(view);
-      view.module.update(dt, ctx);
       view.module.onProgress?.(view.progress(scrollY, viewportH));
+      view.module.update(dt, ctx);
     }
   }
 
@@ -263,11 +263,9 @@ export class Stage {
    *
    * `dt` (seconds) only matters on the post path, where it drives time-based
    * effects (the riso grain clock). Both RenderHost implementations call this
-   * with no argument, so it falls back to the last `update(dt)` — which is
-   * why a host that skips `update()` (MainThreadHost does, under reduced
-   * motion) leaves the clock frozen. That is the correct outcome there:
-   * `shouldEnablePost` has the whole chain disabled under reduced motion
-   * anyway.
+   * with no argument, so it falls back to the last `update(dt)`. Reduced-motion
+   * hosts still update scroll poses but pass `dt = 0`, keeping that clock
+   * frozen; the whole post chain is disabled in that mode anyway.
    */
   render(dt: number = this.lastDt): void {
     const scrollY = this.frame.scroll.current;
@@ -383,11 +381,12 @@ export class Stage {
 
   private renderScissored(visible: View[], scrollY: number): void {
     const { height, dpr } = this.frame.size;
+    const deviceDpr = clampDpr(dpr, this.frame.quality);
     for (const view of visible) {
       // Single source of truth for the document-rect -> device-pixel
       // scissor/viewport math (design review item E3) — see gl/view.ts's
       // `computeScissorRect` for the bottom-left-GL-origin flip derivation.
-      const scissor = computeScissorRect(view.rect, scrollY, height, dpr);
+      const scissor = computeScissorRect(view.rect, scrollY, height, deviceDpr);
 
       this.renderer.setScissor(scissor.x, scissor.y, scissor.width, scissor.height);
       this.renderer.setViewport(scissor.x, scissor.y, scissor.width, scissor.height);

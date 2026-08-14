@@ -285,6 +285,27 @@ describe("Stage.render — culling + render order", () => {
     expect(scissorXs).toEqual([0, 200, 400]);
   });
 
+  it.each([
+    ["high", 2],
+    ["low", 1.5],
+  ] as const)("uses the renderer's capped DPR for %s-tier scissor math", async (quality, expectedDpr) => {
+    const scissors: Array<[number, number, number, number]> = [];
+    const renderer: RendererLike = {
+      ...mockRenderer(),
+      setScissor: (x, y, width, height) => scissors.push([x, y, width, height]),
+    };
+    const stage = new Stage(
+      renderer,
+      baseFrame({ size: { width: 800, height: 800, dpr: 3 }, quality }),
+    );
+    stage.addView(1, { top: 0, left: 0, width: 100, height: 100 }, trackedScene());
+    await flush();
+
+    stage.render();
+
+    expect(scissors).toEqual([[0, 700 * expectedDpr, 100 * expectedDpr, 100 * expectedDpr]]);
+  });
+
   it("resets renderer.info once per render() call when present, so a real THREE draw-call count accumulates across every view instead of reflecting only the last one (BUG B3 stats fix)", async () => {
     const renderer = mockRenderer();
     let resetCalls = 0;
@@ -331,6 +352,26 @@ describe("Stage.render — culling + render order", () => {
 });
 
 describe("Stage.update", () => {
+  it("publishes the current frame's progress before the scene computes its pose", async () => {
+    let sampledProgress = -1;
+    const poses: number[] = [];
+    const stage = new Stage(mockRenderer(), baseFrame());
+    const scene: SceneModule = {
+      init: () => {},
+      onProgress: (progress) => { sampledProgress = progress; },
+      update: () => { poses.push(sampledProgress); },
+      dispose: () => {},
+    };
+
+    stage.addView(1, { top: 0, left: 0, width: 800, height: 800 }, scene);
+    await flush();
+    stage.updateRect(1, { top: 0, left: 0, width: 800, height: 800 }, 0.83);
+
+    stage.update(0.016);
+
+    expect(poses).toEqual([0.83]);
+  });
+
   it("calls module.update and onProgress only for in-view, ready views", async () => {
     const stage = new Stage(mockRenderer(), baseFrame());
     const onProgress = vi.fn();

@@ -74,5 +74,9 @@ describe("@/lib/engine/react/LazyEngineProvider", () => {
     // ...and the visitor still gets the complete, readable 2D film.
     expect(document.querySelector("[data-layout='static']")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: /ENERGY HAS ROOTS/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.querySelector("[data-riso-grain-static]")).toBeInTheDocument();
+    });
+    expect(document.querySelector("canvas")).not.toBeInTheDocument();
   });
 });

@@ -9,7 +9,7 @@
 
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import RisoGrainOverlay from "@/lib/engine/react/RisoGrainOverlay";
+import RisoGrainOverlay, { StaticRisoGrain } from "@/lib/engine/react/RisoGrainOverlay";
 import { RISO_GRAIN_FALLBACK, risoGrainMode } from "@/lib/engine/gl/shaders/riso-policy";
 import type { QualityTier } from "@/lib/engine/types";
 
@@ -51,6 +51,16 @@ describe("@/lib/engine/react/RisoGrainOverlay", () => {
     expect(overlay(container)).toBeInTheDocument();
     // The SVG carries no <animate>, so there is nothing to suppress.
     expect(RISO_GRAIN_FALLBACK.svg).not.toContain("<animate");
+  });
+
+  it("exposes the same static texture to the canvas-free reduced-motion boundary", () => {
+    const { container } = render(<StaticRisoGrain source="reduced-motion" />);
+    const el = container.querySelector<HTMLElement>("[data-riso-grain-static]");
+
+    expect(el).toBeInTheDocument();
+    expect(el).toHaveAttribute("aria-hidden", "true");
+    expect(el!.style.backgroundImage).toContain(RISO_GRAIN_FALLBACK.dataUri);
+    expect(el).not.toHaveAttribute("data-riso-grain-fallback");
   });
 
   it.each(["medium", "high"] satisfies QualityTier[])(

@@ -68,7 +68,9 @@ function latestDeps() {
 
 beforeEach(() => {
   resetFakeEngineCounts();
-  createEngineDepsMock.mockClear();
+  createEngineDepsMock.mockReset().mockImplementation(
+    (_reducedMotion: boolean) => createFakeEngineDeps(),
+  );
   warmOriginFilm.mockReset().mockResolvedValue({ dispose: vi.fn() });
 });
 
@@ -373,7 +375,7 @@ describe("@/lib/engine/react/EngineProvider — registerView/unregisterView via 
 // position, which silently breaks two things at once: Stage culls the view as
 // soon as the page scrolls one viewport past the section top, and the
 // rect-derived progress reads 0.5 at the section's start instead of 0. On a
-// 1200svh film that means GL is dead for ~92% of the scroll and plays its
+// long sticky film that means GL is dead for most of the scroll and plays its
 // second half first. These cases pin the arithmetic that fixes it.
 // ---------------------------------------------------------------------------
 
@@ -400,7 +402,8 @@ function trackFromDataAttrs(el: Element) {
 function StickyViewProbe() {
   const ref = useView("origin-film", { sticky: true });
   return (
-    // The 12000px-tall scroll range, exactly as OriginStory's mobile <section> is.
+    // A deliberately long 12000px sticky range; the math is independent of
+    // OriginStory's current responsive section height.
     <div data-testid="range" data-rect-top={1000} data-rect-height={12000}>
       {/* One viewport tall, pinned. Measured unstuck at the range's top. */}
       <div ref={ref} data-testid="sticky-view" data-rect-top={1000} data-rect-height={1000} />

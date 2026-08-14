@@ -36,7 +36,7 @@ async function expectBackgroundUnderlay(root: HTMLElement, subject: string) {
 
   // 2. A DIRECT child underlay carries it instead. Direct child + inset-0
   //    matters: an underlay nested inside e.g. OriginStory's sticky viewport
-  //    would only cover one screen of a 1200svh section.
+  //    would only cover one screen of a 650svh section.
   const underlay = Array.from(
     root.querySelectorAll<HTMLElement>(':scope > [aria-hidden="true"]'),
   ).find((element) => element.classList.contains("-z-10"));

@@ -33,10 +33,14 @@ function makeRendererMock(): RendererLike {
 
 const rendererMock = makeRendererMock();
 
-vi.mock("@/lib/engine/gl/renderer", () => ({
-  createRenderer: vi.fn(() => rendererMock),
-  setSize: vi.fn(),
-}));
+vi.mock("@/lib/engine/gl/renderer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/engine/gl/renderer")>();
+  return {
+    ...actual,
+    createRenderer: vi.fn(() => rendererMock),
+    setSize: vi.fn(),
+  };
+});
 
 // scene-registry.ts's "placeholder" loader does
 // `import("@/lib/scenes/placeholder/scene").then((m) => m.default())` — mock

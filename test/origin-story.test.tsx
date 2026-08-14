@@ -11,10 +11,8 @@ vi.mock("@/lib/engine/react/create-engine", () => ({
 // scrollYProgress at 0 forever and nothing downstream of it is observable.
 // This hands the film a scroll position the test can drive. It rests at 0,
 // which is exactly what the unmocked hook produces here, so every other case
-// in this file behaves identically. useSpring passes through for the same
-// reason: ORIGIN_SCROLL_SPRING smooths *how fast* the film reaches a colour,
-// never *which* colour it reaches, and its own tuning is covered by
-// test/motion.ts.
+// in this file behaves identically. The MotionValue itself is the shared film
+// clock: DOM tracks and the engine's sticky range must sample the same value.
 const { filmScroll } = vi.hoisted(() => ({
   filmScroll: { current: null as null | { set: (value: number) => void } },
 }));
@@ -32,7 +30,6 @@ vi.mock("framer-motion", async (importOriginal) => {
       scrollX: actual.motionValue(0),
       scrollXProgress: actual.motionValue(0),
     }),
-    useSpring: (source: unknown) => source,
   };
 });
 
@@ -58,7 +55,7 @@ import {
   handoffLayerScale,
   handoffProgress,
 } from "@/lib/visuals/shelf-to-showcase";
-import { originBackgroundTrack, originChapters } from "@/lib/visuals/origin-timeline";
+import { isActive, originBackgroundTrack, originChapters } from "@/lib/visuals/origin-timeline";
 import { createFakeEngineDeps } from "./engine/react/test-utils/fake-engine";
 import { setReducedMotion } from "./setup";
 
@@ -135,7 +132,7 @@ describe("@/components/OriginStory", () => {
     expect(screen.queryAllByRole("link", { name: "SHOP THE FLAVORS" })).toHaveLength(0);
     expect(screen.queryAllByRole("link", { name: "WHY YERBA MATE? ↓" })).toHaveLength(0);
     expect(container.firstElementChild).toHaveAttribute("data-layout", "sticky");
-    expect(container.firstElementChild).toHaveClass("h-[1200svh]", "md:h-[1500svh]");
+    expect(container.firstElementChild).toHaveClass("h-[650svh]", "md:h-[800svh]");
     // The bespoke <canvas> is gone for good: every pixel of GL now comes from
     // EngineProvider's single shared canvas, which is a sibling of this
     // section, never a child of it.
@@ -247,6 +244,55 @@ describe("@/components/OriginStory", () => {
     expect(screen.getByRole("link", { name: "WHY YERBA MATE? ↓" })).toHaveAttribute("href", "#benefits");
   });
 
+  it("tracks the most visible static chapter and clears sticky navigation on anchor jumps", () => {
+    let callback: IntersectionObserverCallback = () => {};
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const NativeObserver = globalThis.IntersectionObserver;
+
+    class ControlledObserver {
+      constructor(next: IntersectionObserverCallback) {
+        callback = next;
+      }
+      observe = observe;
+      unobserve = vi.fn();
+      disconnect = disconnect;
+      takeRecords = () => [];
+      root = null;
+      rootMargin = "";
+      thresholds = [];
+    }
+    globalThis.IntersectionObserver = ControlledObserver as unknown as typeof IntersectionObserver;
+
+    try {
+      setReducedMotion(true);
+      const { container, unmount } = renderOrigin();
+      const chapters = Array.from(container.querySelectorAll<HTMLElement>("article[id^='origin-chapter-']"));
+      const links = screen.getAllByRole("link", { name: /^0[1-7]/ });
+
+      expect(observe).toHaveBeenCalledTimes(7);
+      expect(chapters[0]).toHaveClass("scroll-mt-32", "md:scroll-mt-40");
+
+      act(() => {
+        callback(
+          [
+            { target: chapters[0]!, isIntersecting: true, intersectionRatio: 0.2 },
+            { target: chapters[3]!, isIntersecting: true, intersectionRatio: 0.8 },
+          ] as unknown as IntersectionObserverEntry[],
+          {} as IntersectionObserver,
+        );
+      });
+
+      expect(links[0]).not.toHaveAttribute("aria-current");
+      expect(links[3]).toHaveAttribute("aria-current", "step");
+
+      unmount();
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.IntersectionObserver = NativeObserver;
+    }
+  });
+
   it("keeps its complete 2D fallback when rendered without engine context", () => {
     const { container } = render(
       <Providers>
@@ -257,6 +303,30 @@ describe("@/components/OriginStory", () => {
     expect(container.querySelector("[data-origin-film-fallback]")).toBeInTheDocument();
     expect(container.querySelector("[data-origin-beat-art]")).toHaveStyle({ opacity: "1" });
     expect(container.querySelector("svg[data-origin-living-line]")).toBeInTheDocument();
+  });
+
+  it("lands animated chapter links one pixel inside their progress interval", () => {
+    const { container } = renderOrigin();
+    const section = container.querySelector<HTMLElement>("[data-origin-film]")!;
+    const sectionTop = 500;
+    const scrollHeight = 8000;
+    const scrollableDistance = scrollHeight - window.innerHeight;
+    Object.defineProperty(section, "scrollHeight", { configurable: true, value: scrollHeight });
+    vi.spyOn(section, "getBoundingClientRect").mockReturnValue({
+      top: sectionTop,
+    } as DOMRect);
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+    screen.getByRole("link", { name: /^04FILLED & SEALED/ }).click();
+
+    const call = scrollTo.mock.calls.at(-1)?.[0] as ScrollToOptions;
+    const progress = (Number(call.top) - sectionTop) / scrollableDistance;
+    expect(Number(call.top)).toBeCloseTo(
+      sectionTop + scrollableDistance * originChapters[3]!.band.peak + 1,
+      9,
+    );
+    expect(isActive(3, progress)).toBe(true);
+    expect(isActive(2, progress)).toBe(false);
   });
 });
 
@@ -620,7 +690,7 @@ describe("@/components/OriginStory — drag-to-inspect gesture policy (C4)", () 
     await scrubFilm(CAN_BEAT);
     expect(surface!.style.touchAction).toBe(DRAG_INSPECT_TOUCH_ACTION);
     // The whole point: the browser keeps vertical panning natively on a
-    // 1200svh page. `none` would make the film a scroll trap.
+    // 650svh page. `none` would make the film a scroll trap.
     expect(surface!.style.touchAction).not.toBe("none");
     // ...and pinch-to-zoom survives, which a bare `pan-y` would revoke for
     // every pixel of the section (WCAG 1.4.4).

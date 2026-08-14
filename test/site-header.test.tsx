@@ -203,7 +203,7 @@ describe("lib/section-ink", () => {
     act(() => publishes.at(-1)!("#1D423C"));
     expect(screen.getByRole("status")).toHaveTextContent("#1D423C");
     // Republishing the colour it already holds must not re-render the tree:
-    // the film calls this on every scroll frame of a 1500svh section.
+    // the film calls this on every scroll frame of an 800svh section.
     expect(publishes.length).toBe(rendersBefore);
 
     rects.mockRestore();

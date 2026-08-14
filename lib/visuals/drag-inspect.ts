@@ -6,7 +6,7 @@
 // the gesture arbitration and the numbers.
 //
 // The whole reason this exists as a standalone state machine is AXIS LOCK.
-// The origin film is a 1200svh/1500svh vertical scroll, so an inspector that
+// The origin film is a 650svh/800svh vertical scroll, so an inspector that
 // grabs every pointer gesture eats the page's scroll on touch. The machine is
 // therefore explicitly undecided (`axis: "none"`) until the pointer travels
 // past `axisLockThreshold`, and it NEVER asks for `preventDefault()` while

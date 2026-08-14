@@ -24,8 +24,9 @@ import { domAnimation, LazyMotion, MotionConfig } from "framer-motion";
 // which nothing renders today (test/motion.test.ts scans every .tsx under
 // components/, app/ and lib/ and fails if a drag/layout prop appears,
 // because under domAnimation those props DON'T throw — they silently do
-// nothing). The planned drag-to-inspect can (concept C4) is the one known
-// feature that would force domMax; that trade gets made when the code exists.
+// nothing). The current drag-to-inspect can uses pointer events and the shared
+// inspector state machine, not Framer's `drag` prop, so it does not require
+// domMax. A future Framer drag/layout feature would need that trade revisited.
 //
 // `strict` makes rendering a full `motion.*` element inside this tree throw,
 // so a reverted import fails loudly instead of quietly restoring the payload.

@@ -46,6 +46,40 @@ export default function ChapterScrubber({ progress, sectionRef }: ChapterScrubbe
     return progress.on("change", updateActiveChapter);
   }, [progress]);
 
+  useEffect(() => {
+    if (progress || typeof IntersectionObserver === "undefined") return;
+
+    const targets = originChapters
+      .map((chapter) => document.getElementById(originChapterId(chapter.number)))
+      .filter((target): target is HTMLElement => target !== null);
+    const ratios = new Map<Element, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          ratios.set(entry.target, entry.isIntersecting ? entry.intersectionRatio : 0);
+        }
+
+        let nextIndex = -1;
+        let bestRatio = 0;
+        targets.forEach((target, index) => {
+          const ratio = ratios.get(target) ?? 0;
+          if (ratio > bestRatio) {
+            bestRatio = ratio;
+            nextIndex = index;
+          }
+        });
+        if (nextIndex >= 0) setActiveIndex(nextIndex);
+      },
+      {
+        rootMargin: "-20% 0px -55% 0px",
+        threshold: [0, 0.25, 0.5, 0.75, 1],
+      },
+    );
+
+    targets.forEach((target) => observer.observe(target));
+    return () => observer.disconnect();
+  }, [progress]);
+
   // Read after mount only: sessionStorage is unavailable during SSR and would
   // otherwise desynchronise the hydrated markup.
   useEffect(() => {
@@ -79,7 +113,15 @@ export default function ChapterScrubber({ progress, sectionRef }: ChapterScrubbe
     const section = sectionRef.current;
     const sectionTop = section.getBoundingClientRect().top + window.scrollY;
     const scrollableDistance = Math.max(0, section.scrollHeight - window.innerHeight);
-    const targetTop = sectionTop + scrollableDistance * originChapters[index].band.peak;
+    // A peak usually maps to a fractional document pixel. Browsers quantize
+    // the final scroll position, and rounding just below that exact boundary
+    // leaves the previous chapter aria-current. Land one CSS pixel inside the
+    // requested chapter instead (clamped for a zero/terminal range).
+    const targetOffset = Math.min(
+      scrollableDistance,
+      scrollableDistance * originChapters[index].band.peak + Math.min(1, scrollableDistance),
+    );
+    const targetTop = sectionTop + targetOffset;
 
     window.scrollTo({
       top: targetTop,

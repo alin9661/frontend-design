@@ -20,7 +20,6 @@ import Providers from "@/app/providers";
 import {
   CAN_SPRING,
   CTA_SPRING,
-  ORIGIN_SCROLL_SPRING,
   EASE_OUT,
   REVEAL,
   REVEAL_SLOW,
@@ -29,7 +28,7 @@ import {
 } from "@/lib/motion";
 
 const TWEEN_TOKENS = { REVEAL, REVEAL_SLOW, SWAP, SWAP_FAST } as const;
-const SPRING_TOKENS = { CTA_SPRING, CAN_SPRING, ORIGIN_SCROLL_SPRING } as const;
+const SPRING_TOKENS = { CTA_SPRING, CAN_SPRING } as const;
 
 describe("lib/motion — real invariants (survive a retune, unlike a change-detector)", () => {
   it("EASE_OUT is a 4-number cubic-bezier tuple", () => {

@@ -475,6 +475,15 @@ describe("lib/project-criteria source predicates", () => {
       void loadOriginAssets().then((assets) => {});`;
 
     expect(glbPipelineDegradesToProcedural({ gltf, scene })).toBe(true);
+    expect(
+      glbPipelineDegradesToProcedural({
+        gltf,
+        scene: `
+          this.machine = buildMachine({ simplified: compact });
+          this.hand = buildHand({ silhouette: compact });
+          void loadOriginAssets().then((assets) => {});`,
+      }),
+    ).toBe(true);
 
     // Loader imported before the file is known to exist: every visitor pays
     // for GLTFLoader + meshopt to parse nothing.

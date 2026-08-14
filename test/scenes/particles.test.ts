@@ -70,6 +70,11 @@ function makeCtx(overrides: Partial<ViewContext> = {}): ViewContext {
     size: { width: 800, height: 600, dpr: 1 },
     quality: "high",
     reducedMotion: false,
+    // Stage probes this for every view. Stated explicitly here because the
+    // scene reads an ABSENT verdict as "none" and skips the GPGPU sim
+    // entirely — so a context that quietly omitted it would leave the
+    // simulation suites below testing the analytic fallback instead.
+    floatSupport: "float",
     ...overrides,
   };
 }
@@ -330,6 +335,56 @@ describe("particles scene — sim uniform plumbing (mocked GpgpuRenderer)", () =
 
     scene.dispose();
   });
+
+  it("takes the half-float texture type when that is all the GPU can render into", async () => {
+    // The bug this replaces: `Gpgpu` was constructed with no `support` at all,
+    // taking its documented-unsafe `"float"` default, so on hardware without
+    // EXT_color_buffer_float the ping-pong targets came back
+    // framebuffer-incomplete — silently. Nothing throws, `compute()` writes
+    // nothing, and the column renders black with no fallback.
+    const scene = createParticlesScene();
+    const ctx = makeCtx({ quality: "low", floatSupport: "half-float" });
+    await scene.init(ctx);
+
+    const renderer = mockGpgpuRenderer();
+    scene.update(1 / 60, { ...ctx, renderer } as ViewContext & { renderer: GpgpuRenderer });
+
+    const points = ctx.scene.children.find((o) => o instanceof THREE.Points) as THREE.Points;
+    const material = points.material as THREE.ShaderMaterial;
+    const simTexture = material.uniforms.uPositionTexture!.value as THREE.Texture;
+    expect(simTexture).not.toBeNull();
+    expect(simTexture.type).toBe(THREE.HalfFloatType);
+    expect(material.uniforms.uUseSimTexture!.value).toBe(1);
+
+    scene.dispose();
+  });
+
+  it.each(["none", undefined] as const)(
+    "falls back to the analytic plume — never a black column — when float support is %s",
+    async (floatSupport) => {
+      const scene = createParticlesScene();
+      // `undefined` covers a host that never probed at all: ViewContext's own
+      // contract says to read that as "none", not to guess.
+      const ctx = makeCtx({ quality: "low", floatSupport });
+      await scene.init(ctx);
+
+      const points = ctx.scene.children.find((o) => o instanceof THREE.Points) as THREE.Points;
+      const material = points.material as THREE.ShaderMaterial;
+
+      const renderer = mockGpgpuRenderer();
+      scene.update(1 / 60, { ...ctx, renderer } as ViewContext & { renderer: GpgpuRenderer });
+
+      // No render-to-texture was attempted, and the render shader stays on
+      // the analytic branch that positions particles from the seed texture —
+      // so the plume still animates, it just isn't simulated.
+      expect(renderer.calls).toEqual([]);
+      expect(material.uniforms.uUseSimTexture!.value).toBe(0);
+      expect(material.uniforms.uPositionTexture!.value).toBeNull();
+      expect(points.geometry.getAttribute("aUv")).toBeTruthy();
+
+      scene.dispose();
+    },
+  );
 });
 
 describe("particles scene — dispose bookkeeping", () => {

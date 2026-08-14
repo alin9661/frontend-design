@@ -241,7 +241,24 @@ class ParticlesScene implements SceneModule {
       vertexShader: simulationVertexShader,
       fragmentShader: `${simplex3d}\n${curlNoise}\n${simulationFragmentShader}`,
     });
-    this.gpgpu = new Gpgpu({ width: gridSize, height: gridSize, simulationMaterial: this.simMaterial });
+    // `floatSupport` is optional on ViewContext, and `undefined` means nobody
+    // probed this context — which ViewContext's own contract says to read as
+    // "none". Gpgpu's `support` defaults to `"float"` precisely so that a
+    // caller who forgets to probe reproduces the original bug: on hardware
+    // without EXT_color_buffer_float the ping-pong FBOs come back
+    // framebuffer-incomplete, nothing throws, `compute()` writes nothing, and
+    // the column renders black. So: probe, and simply do not build the
+    // simulation when the verdict says the GPU cannot hold it.
+    const floatSupport = ctx.floatSupport ?? "none";
+    this.gpgpu =
+      floatSupport === "none"
+        ? null
+        : new Gpgpu({
+            width: gridSize,
+            height: gridSize,
+            simulationMaterial: this.simMaterial,
+            support: floatSupport,
+          });
 
     this.geometry = new THREE.BufferGeometry();
     this.geometry.setAttribute(
@@ -345,6 +362,10 @@ class ParticlesScene implements SceneModule {
    * `update()` can't yet.
    */
   computeSim(renderer: GpgpuRenderer): void {
+    // `gpgpu` is null when `detectFloatSupport` said the GPU cannot render
+    // into a float target. That is not an error state: the render shader's
+    // `uUseSimTexture: 0` branch positions every particle analytically from
+    // the seed texture, so the plume still flows — it just is not simulated.
     if (!this.gpgpu || !this.simMaterial || !this.renderMaterial) return;
     this.gpgpu.compute(renderer);
     this.simMaterial.uniforms.uFirstFrame!.value = 0;

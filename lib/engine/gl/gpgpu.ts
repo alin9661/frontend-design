@@ -10,6 +10,10 @@
 // in tests without spinning up a WebGL context.
 
 import * as THREE from "three";
+import {
+  floatSupportToTextureType,
+  type FloatSupport,
+} from "@/lib/engine/gl/float-support";
 
 export interface GpgpuRenderer {
   setRenderTarget(target: THREE.WebGLRenderTarget | null): void;
@@ -21,7 +25,32 @@ export interface GpgpuOptions {
   height: number;
   /** Fullscreen-quad material; must read the previous state from a `uTexture` uniform. */
   simulationMaterial: THREE.ShaderMaterial;
+  /**
+   * Explicit texture type. This wins over `support` when float textures are
+   * supported, but an explicit `support: "none"` verdict always throws.
+   */
   type?: THREE.TextureDataType;
+  /**
+   * Result of `detectFloatSupport(gl)`. Call it WITHOUT `linearFilter`: the
+   * render targets below pin `NearestFilter`, so linear-filter capability is
+   * irrelevant here and requiring it would demote hardware that renders to
+   * float perfectly well.
+   *
+   * Defaults to `"float"` so callers that predate capability probing keep
+   * their previous behaviour — which means the unsafe path is still the
+   * default, and a new caller that forgets to probe gets the old bug. Probe.
+   */
+  support?: FloatSupport;
+}
+
+/** Raised when callers must use their CPU simulation fallback. */
+export class GpgpuFloatSupportError extends Error {
+  constructor() {
+    super(
+      "Gpgpu requires renderable floating-point textures. Call detectFloatSupport(gl) before construction and use a CPU fallback when it returns \"none\".",
+    );
+    this.name = "GpgpuFloatSupportError";
+  }
 }
 
 /**
@@ -43,12 +72,17 @@ export class Gpgpu {
   private material: THREE.ShaderMaterial;
 
   constructor(opts: GpgpuOptions) {
+    const mappedType = floatSupportToTextureType(opts.support ?? "float");
+    if (mappedType === null) {
+      throw new GpgpuFloatSupportError();
+    }
+
     this.width = opts.width;
     this.height = opts.height;
     this.material = opts.simulationMaterial;
 
     const rtOptions: THREE.RenderTargetOptions = {
-      type: opts.type ?? THREE.FloatType,
+      type: opts.type ?? mappedType,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
       depthBuffer: false,

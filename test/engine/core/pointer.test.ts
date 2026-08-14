@@ -77,6 +77,40 @@ describe("PointerTracker", () => {
     tracker.destroy();
   });
 
+  it("clears down on pointercancel, which is all the UA fires when it takes a touch gesture", () => {
+    const ticker = new Ticker();
+    const el = fakeWindow(1000, 800);
+    const tracker = new PointerTracker(ticker, { el });
+
+    // A touch that starts on a `touch-action: pan-y` element and turns into a
+    // vertical pan: the UA claims the gesture and sends pointercancel INSTEAD
+    // of pointerup. Latching `down` here leaves every consumer believing a
+    // drag is still in flight for the rest of the session.
+    el.dispatchEvent(new Event("pointerdown"));
+    expect(tracker.state.down).toBe(true);
+
+    el.dispatchEvent(new Event("pointercancel"));
+    expect(tracker.state.down).toBe(false);
+
+    // And the tracker is still usable afterwards — a cancel is not a teardown.
+    el.dispatchEvent(new Event("pointerdown"));
+    expect(tracker.state.down).toBe(true);
+
+    tracker.destroy();
+  });
+
+  it("stops responding to pointercancel after destroy()", () => {
+    const ticker = new Ticker();
+    const el = fakeWindow(1000, 800);
+    const tracker = new PointerTracker(ticker, { el });
+
+    el.dispatchEvent(new Event("pointerdown"));
+    tracker.destroy();
+
+    el.dispatchEvent(new Event("pointercancel"));
+    expect(tracker.state.down).toBe(true); // frozen at teardown, not mutated
+  });
+
   it("clears inside on pointerleave", () => {
     const ticker = new Ticker();
     const el = fakeWindow(1000, 800);
